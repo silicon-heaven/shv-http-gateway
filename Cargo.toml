@@ -1,0 +1,20 @@
+[package]
+name = "shv-http-gateway"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.0.16" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.0.21" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.3.14", features = ["tokio"] }
+rocket = { version = "0.5.1", features = ["tls", "json"] }
+tokio = { version = "1.43.0", features = ["net", "time"] }
+log = "0.4.25"
+rand_chacha = "0.3.1"
+url = { version = "2.5.4", features = ["serde"] }
+clap = { version = "4.5.26", features = ["derive"] }
+duration-str = "0.12.0"
+base64 = "0.22.1"
+
+[patch."https://github.com/silicon-heaven/libshvclient-rs"]
+shvclient = { path = "../libshvclient-rs" }
