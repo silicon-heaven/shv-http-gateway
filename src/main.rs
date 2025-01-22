@@ -69,7 +69,7 @@ async fn api_subscribe(
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
     let mut subscriber = command_channel
         .subscribe(path, signal)
-        .map_err(|e| err_response(Status::ServiceUnavailable, e.to_string()))?;
+        .map_err(|e| err_response(Status::InternalServerError, e.to_string()))?;
 
     let event_stream = EventStream! {
         loop {
@@ -79,7 +79,6 @@ async fn api_subscribe(
                     match frame.to_rpcmesage() {
                         Err(e) => {
                             warn!("Received invalid RPC frame in notification: {e}\nframe: {frame}");
-                            err_response(Status::InternalServerError, e.to_string());
                             yield Event::data(e.to_string()).event("error");
                         }
                         Ok(msg) => yield Event::json(&json!({
@@ -124,7 +123,7 @@ async fn api_login(
         .await
         .ok_or_else(|| {
             warn!("Cannot start SHV client for user `{}`", params.username);
-            err_response(Status::InternalServerError, "Cannot connect to the broker")
+            err_response(Status::ServiceUnavailable, "Cannot connect to the broker")
         })?;
 
     // Wait for the client to connect
@@ -213,11 +212,11 @@ fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
         Status::InternalServerError,
         json!({
             "code": Status::InternalServerError.code,
-            "rpc_error": match e.error() {
-                CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed",
-                CallRpcMethodErrorKind::InvalidMessage(_) => "InvalidMessage",
-                CallRpcMethodErrorKind::RpcError(_) => "RpcError",
-                CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch",
+            "shv_error": match e.error() {
+                CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed".to_string(),
+                CallRpcMethodErrorKind::InvalidMessage(_) => "InvalidMessage".to_string(),
+                CallRpcMethodErrorKind::RpcError(rpc_err) => format!("RpcError({rpc_err})"),
+                CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch".to_string(),
             },
             "detail": e.to_string(),
         }).to_string()
@@ -233,12 +232,12 @@ async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::E
         .map_or_else(|| Ok(None), |s|
             shvproto::RpcValue::from_cpon(s)
             .map(Some)
-            .map_err(|e| err_response(Status::BadRequest, format!("Invalid request param: {e}")))
+            .map_err(|e| err_response(Status::UnprocessableEntity, format!("Invalid request param: {e}")))
         )?;
     let result: shvproto::RpcValue = command_channel
         .call_rpc_method(request.path, request.method, param)
         .await
-        .map_err(|e| err_response_rpc_call(e))?;
+        .map_err(err_response_rpc_call)?;
     Ok(json!({
         "result": result.to_cpon()
     }))
@@ -264,7 +263,7 @@ impl<'r> FromRequest<'r> for Session {
             .headers()
             .get_one("Authorization");
         let Some(session_id) = value else {
-            return_err!(Status::BadRequest, "Missing authorization header");
+            return_err!(Status::BadRequest, "Missing Authorization header");
         };
 
         let Sessions(sessions) = request.rocket().state().expect("Sessions are present");
