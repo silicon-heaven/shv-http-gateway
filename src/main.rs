@@ -1,0 +1,308 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use base64::prelude::*;
+use clap::Parser;
+use log::{error, info, warn};
+use rand_chacha::rand_core::{RngCore, SeedableRng};
+use rand_chacha::ChaChaRng;
+use rocket::futures::StreamExt;
+use rocket::http::Status;
+use rocket::request::{FromRequest, Outcome};
+use rocket::response::stream::{Event, EventStream};
+use rocket::serde::json::{self, json, Json};
+use rocket::serde::Deserialize;
+use rocket::tokio::time::Duration;
+use rocket::{catch, catchers, launch, post, routes, Request};
+use rocket::State;
+use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
+use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
+use shvrpc::RpcMessageMetaTags;
+use tokio::sync::{Mutex, RwLock};
+use url::Url;
+
+pub(crate) async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver)> {
+    let (tx, rx) = rocket::futures::channel::oneshot::channel();
+    tokio::spawn(async move {
+        shvclient::client::Client::new_plain()
+            .run_with_init(&config, |commands_tx, events_rx|
+                tx.send((commands_tx, events_rx))
+                .unwrap_or_else(|(commands_tx, _)| {
+                    warn!("Client channels dropped before handed to the caller. Terminating the client");
+                    commands_tx.terminate_client();
+                })
+            )
+            .await
+            .unwrap_or_else(|e| error!("Client finished with error: {e}"));
+        }
+    );
+    rx.await.ok()
+}
+
+type ErrorResponse = (Status, String);
+
+fn err_response<T: AsRef<str>>(status: Status, detail: impl Into<Option<T>>) -> ErrorResponse {
+    (
+        status,
+        json!({
+            "code": status.code,
+            "detail": detail.into().map(|v| v.as_ref().to_string()),
+        }).to_string()
+    )
+}
+
+#[derive(Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct SubscribeRequest<'t> {
+    path: &'t str,
+    signal: &'t str,
+}
+
+#[post("/subscribe", data = "<request>")]
+async fn api_subscribe(
+    session: Session,
+    request: Result<Json<SubscribeRequest<'_>>, json::Error<'_>>,
+) -> Result<EventStream![], ErrorResponse>
+{
+    let Session(_session_id, SessionData { command_channel, .. }) = session;
+    let Json(SubscribeRequest { path, signal }) = request
+        .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
+    let mut subscriber = command_channel
+        .subscribe(path, signal)
+        .map_err(|e| err_response(Status::ServiceUnavailable, e.to_string()))?;
+
+    let event_stream = EventStream! {
+        loop {
+            match subscriber.next().await {
+                None => break,
+                Some(frame) => {
+                    match frame.to_rpcmesage() {
+                        Err(e) => {
+                            warn!("Received invalid RPC frame in notification: {e}\nframe: {frame}");
+                            err_response(Status::InternalServerError, e.to_string());
+                            yield Event::data(e.to_string()).event("error");
+                        }
+                        Ok(msg) => yield Event::json(&json!({
+                            "path": msg.shv_path(),
+                            "signal": msg.method(),
+                            "param": msg.param().map(shvproto::RpcValue::to_cpon),
+                        })),
+                    }
+
+                }
+            }
+        }
+    };
+    Ok(event_stream)
+}
+
+#[post("/login", data = "<params>")]
+async fn api_login(
+    params: Result<Json<LoginParams<'_>>, json::Error<'_>>,
+    program_config: &State<ProgramConfig>,
+    sessions: &State<Sessions>,
+    random: &State<Random>,
+) -> Result<json::Value, ErrorResponse>
+{
+    let params = params
+        .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
+    let mut url = program_config.broker_url.clone();
+    url.set_username(params.username)
+        .map_err(|()| {
+            error!("Cannot set username {} for URL {}", params.username, url);
+            err_response(Status::InternalServerError, "Cannot authenticate")
+        })?;
+    url.set_password(Some(params.password))
+        .map_err(|()| {
+            error!("Cannot set password {} for URL {}", params.password, url);
+            err_response(Status::InternalServerError, "Cannot authenticate")
+        })?;
+    let heartbeat_interval = program_config.heartbeat_interval;
+    let client_config = shvrpc::client::ClientConfig { url, heartbeat_interval, ..Default::default() };
+
+    let (client_commands_tx, mut client_events_rx) = start_client(client_config)
+        .await
+        .ok_or_else(|| {
+            warn!("Cannot start SHV client for user `{}`", params.username);
+            err_response(Status::InternalServerError, "Cannot connect to the broker")
+        })?;
+
+    // Wait for the client to connect
+    match client_events_rx.next().await {
+        Some(ClientEvent::Connected) => { },
+        None | Some(ClientEvent::Disconnected) | Some(ClientEvent::ConnectionFailed(ConnectionFailedKind::NetworkError)) => {
+            return Err(err_response(Status::ServiceUnavailable, "Connection to the broker failed"));
+        }
+        Some(ClientEvent::ConnectionFailed(ConnectionFailedKind::LoginFailed)) => {
+            return Err(err_response(Status::Unauthorized, "Bad credentials"));
+        }
+    }
+
+    // Generate a new session ID
+    let Random(random) = random.inner();
+    let mut random_bytes = vec![0u8;30];
+    random.lock().await.fill_bytes(&mut random_bytes);
+    let session_id = BASE64_URL_SAFE.encode(random_bytes);
+
+    // Save the session
+    let Sessions(sessions) = sessions.inner();
+    sessions.write().await.insert(
+        session_id.clone(),
+        SessionData {
+            command_channel: client_commands_tx,
+            username: params.username.into(),
+        });
+
+    // Remove the session when the client terminates
+    {
+        let sessions = sessions.clone();
+        let session_id = session_id.clone();
+        tokio::spawn(async move {
+            loop {
+                match client_events_rx.next().await {
+                    Some(ClientEvent::Connected) => continue,
+                    _ => {
+                        if let Some(SessionData { username, .. }) = sessions.write().await.remove(&session_id) {
+                            info!("Removed session {session_id} for user {username}");
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(json::json!({ "session_id": session_id }))
+}
+
+#[derive(Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct LoginParams<'r> {
+    username: &'r str,
+    password: &'r str,
+}
+
+#[derive(Clone)]
+struct SessionData {
+    command_channel: ClientCommandSender,
+    username: String,
+    // events_channel: ClientEventsReceiver,
+}
+
+#[derive(Clone, Default)]
+struct Sessions(pub(crate) Arc<RwLock<HashMap<String, SessionData>>>);
+
+
+#[post("/logout")]
+async fn api_logout(session: Session) {
+    let Session(_, SessionData { command_channel, username }) = session;
+    info!("Logout session of user `{username}`");
+    command_channel.terminate_client();
+}
+
+#[derive(Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct RpcRequest<'t> {
+    path: &'t str,
+    method: &'t str,
+    param: Option<&'t str>,
+}
+
+fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
+    (
+        Status::InternalServerError,
+        json!({
+            "code": Status::InternalServerError.code,
+            "rpc_error": match e.error() {
+                CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed",
+                CallRpcMethodErrorKind::InvalidMessage(_) => "InvalidMessage",
+                CallRpcMethodErrorKind::RpcError(_) => "RpcError",
+                CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch",
+            },
+            "detail": e.to_string(),
+        }).to_string()
+    )
+}
+
+#[post("/rpc", data = "<request>")]
+async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<json::Value, ErrorResponse> {
+    let Session(_, SessionData { command_channel, .. }) = session;
+    let request = request
+        .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
+    let param = request.param
+        .map_or_else(|| Ok(None), |s|
+            shvproto::RpcValue::from_cpon(s)
+            .map(Some)
+            .map_err(|e| err_response(Status::BadRequest, format!("Invalid request param: {e}")))
+        )?;
+    let result: shvproto::RpcValue = command_channel
+        .call_rpc_method(request.path, request.method, param)
+        .await
+        .map_err(|e| err_response_rpc_call(e))?;
+    Ok(json!({
+        "result": result.to_cpon()
+    }))
+}
+
+struct Session(String, SessionData);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for Session {
+    type Error = ErrorResponse;
+
+    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
+        macro_rules! return_err {
+            ($status:expr, $detail:expr) => {
+                {
+                    let e = err_response($status, $detail);
+                    request.local_cache(|| e.clone());
+                    return Outcome::Error(($status, e));
+                }
+            };
+        }
+        let value = request
+            .headers()
+            .get_one("Authorization");
+        let Some(session_id) = value else {
+            return_err!(Status::BadRequest, "Missing authorization header");
+        };
+
+        let Sessions(sessions) = request.rocket().state().expect("Sessions are present");
+        let Some(session_data) = sessions.read().await.get(session_id).cloned() else {
+            return_err!(Status::Unauthorized, "Invalid session token");
+        };
+
+        Outcome::Success(Session(session_id.into(), session_data))
+    }
+}
+
+#[catch(default)]
+fn catch_default(status: Status, req: &Request) -> ErrorResponse {
+    req.local_cache(|| err_response::<&str>(status, status.reason())).clone()
+}
+
+struct Random(pub(crate) Arc<Mutex<ChaChaRng>>);
+
+#[derive(Debug, clap::Parser)]
+struct ProgramConfig {
+    #[arg(long)]
+    broker_url: Url,
+    #[arg(long, default_value = "10")]
+    max_user_sessions: i32,
+    #[arg(long, default_value = "10m", value_parser = |val: &str| duration_str::parse_std(val))]
+    session_timeout: Duration,
+    #[arg(long, default_value = "60s", value_parser = |val: &str| duration_str::parse_std(val))]
+    heartbeat_interval: Duration,
+}
+
+#[launch]
+fn rocket() -> _ {
+    let program_config = ProgramConfig::parse();
+    println!("{program_config:?}");
+    rocket::build()
+        .mount("/api", routes![api_login, api_logout, api_rpc, api_subscribe])
+        .register("/", catchers![catch_default])
+        .manage(program_config)
+        .manage(Sessions::default())
+        .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_entropy()))))
+}
