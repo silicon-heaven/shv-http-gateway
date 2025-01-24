@@ -15,6 +15,7 @@ use rocket::serde::Deserialize;
 use rocket::tokio::time::Duration;
 use rocket::{catch, catchers, launch, post, routes, Request};
 use rocket::State;
+use rocket_cors::{AllowedOrigins, CorsOptions};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
 use shvrpc::RpcMessageMetaTags;
@@ -298,7 +299,19 @@ struct ProgramConfig {
 fn rocket() -> _ {
     let program_config = ProgramConfig::parse();
     println!("{program_config:?}");
+
+    let cors = CorsOptions::default()
+        .allowed_origins(AllowedOrigins::all())
+        .allowed_methods(
+            [rocket::http::Method::Post]
+            .into_iter()
+            .map(From::from)
+            .collect(),
+        )
+        .allow_credentials(false);
+
     rocket::build()
+        .attach(cors.to_cors().expect("Cannot set CORS policy"))
         .mount("/api", routes![api_login, api_logout, api_rpc, api_subscribe])
         .register("/", catchers![catch_default])
         .manage(program_config)
