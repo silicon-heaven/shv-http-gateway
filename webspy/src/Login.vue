@@ -51,7 +51,6 @@ const login = async () => {
       password: password.value,
     });
     const session_id = response.data.session_id;
-    console.log(`session_id: ${session_id}`);
     localStorage.setItem("session_id", session_id);
     router.push("/main");
   } catch (error) {
