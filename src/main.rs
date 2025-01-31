@@ -216,7 +216,7 @@ fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
             "shv_error": match e.error() {
                 CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed".to_string(),
                 CallRpcMethodErrorKind::InvalidMessage(_) => "InvalidMessage".to_string(),
-                CallRpcMethodErrorKind::RpcError(rpc_err) => format!("RpcError({rpc_err})"),
+                CallRpcMethodErrorKind::RpcError(rpc_err) => format!("RpcError({})", rpc_err.code),
                 CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch".to_string(),
             },
             "detail": e.to_string(),
