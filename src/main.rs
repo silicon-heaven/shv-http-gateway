@@ -6,6 +6,7 @@ use clap::Parser;
 use log::{error, info, warn};
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
+#[cfg(feature = "webspy")] use rocket::fs::FileServer;
 use rocket::futures::StreamExt;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
@@ -310,11 +311,16 @@ fn rocket() -> _ {
         )
         .allow_credentials(false);
 
-    rocket::build()
+    let rocket = rocket::build()
         .attach(cors.to_cors().expect("Cannot set CORS policy"))
         .mount("/api", routes![api_login, api_logout, api_rpc, api_subscribe])
         .register("/", catchers![catch_default])
         .manage(program_config)
         .manage(Sessions::default())
-        .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_entropy()))))
+        .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_entropy()))));
+
+    #[cfg(feature = "webspy")]
+    let rocket = rocket.mount("/webspy", FileServer::from("webspy/dist"));
+
+    rocket
 }
