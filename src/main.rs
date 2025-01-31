@@ -6,7 +6,7 @@ use clap::Parser;
 use log::{error, info, warn};
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
-#[cfg(feature = "webspy")] use rocket::fs::FileServer;
+#[cfg(feature = "webspy")] use rocket::fs::{FileServer,relative};
 use rocket::futures::StreamExt;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
@@ -320,7 +320,7 @@ fn rocket() -> _ {
         .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_entropy()))));
 
     #[cfg(feature = "webspy")]
-    let rocket = rocket.mount("/webspy", FileServer::from("webspy/dist"));
+    let rocket = rocket.mount("/webspy", FileServer::from(relative!("webspy/dist")));
 
     rocket
 }
