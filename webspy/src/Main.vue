@@ -268,13 +268,17 @@ const logout = async () => {
   const session_id = localStorage.getItem("session_id");
   if (session_id) {
     localStorage.removeItem("session_id");
-    await axios.post("http://localhost:8000/api/logout", null,
-      {
-        headers: {
-          Authorization: `${session_id}`,
-        },
-      }
-    );
+    try {
+      await axios.post("http://localhost:8000/api/logout", null,
+        {
+          headers: {
+            Authorization: `${session_id}`,
+          },
+        }
+      );
+    } catch(error) {
+      console.error(error);
+    }
   }
   router.push('/login');
   return;
