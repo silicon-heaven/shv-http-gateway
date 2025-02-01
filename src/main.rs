@@ -3,10 +3,12 @@ use std::sync::Arc;
 
 use base64::prelude::*;
 use clap::Parser;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 #[cfg(feature = "webspy")] use rocket::fs::{FileServer,relative};
+use rocket::futures::channel::{self, mpsc::UnboundedSender};
+use rocket::futures::future::Either;
 use rocket::futures::StreamExt;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
@@ -66,14 +68,28 @@ async fn api_subscribe(
     request: Result<Json<SubscribeRequest<'_>>, json::Error<'_>>,
 ) -> Result<EventStream![], ErrorResponse>
 {
-    let Session(_session_id, SessionData { command_channel, .. }) = session;
+    let Session(_session_id, SessionData { command_channel, session_channel, .. }) = session;
     let Json(SubscribeRequest { path, signal }) = request
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
     let mut subscriber = command_channel
         .subscribe(path, signal)
         .map_err(|e| err_response(Status::InternalServerError, e.to_string()))?;
 
+    struct UnsubscribeNotifier(UnboundedSender<SessionEvent>);
+    impl Drop for UnsubscribeNotifier {
+        fn drop(&mut self) {
+            self.0.unbounded_send(SessionEvent::Unsubscription)
+                .unwrap_or_else(|e| error!("Cannot send SessionEvent::Unsubscription: {e}"));
+        }
+    }
+
+    session_channel
+        .unbounded_send(SessionEvent::Subscription)
+        .unwrap_or_else(|e| error!("Cannot send SessionEvent::Subscription: {e}"));
+
     let event_stream = EventStream! {
+        // Notify the session task when the EventStream finishes
+        let _notifier = UnsubscribeNotifier(session_channel);
         loop {
             match subscriber.next().await {
                 None => break,
@@ -145,28 +161,70 @@ async fn api_login(
     random.lock().await.fill_bytes(&mut random_bytes);
     let session_id = BASE64_URL_SAFE.encode(random_bytes);
 
+    let (session_tx, mut session_rx) = channel::mpsc::unbounded();
     // Save the session
     let Sessions(sessions) = sessions.inner();
     sessions.write().await.insert(
         session_id.clone(),
         SessionData {
             command_channel: client_commands_tx,
+            session_channel: session_tx,
             username: params.username.into(),
         });
 
-    // Remove the session when the client terminates
+    // Spawn the session task, which maintains the timeout and removes the session when the client terminates
     {
+        let session_timeout = program_config.session_timeout;
+        let new_session_timer = move || Box::pin(Either::Left(tokio::time::sleep(session_timeout)));
+        let disabled_session_timer = || Box::pin(Either::Right(std::future::pending()));
+
         let sessions = sessions.clone();
         let session_id = session_id.clone();
         tokio::spawn(async move {
+            let mut session_timer = new_session_timer();
+            let mut subscriptions_count = 0_i64;
             loop {
-                match client_events_rx.next().await {
-                    Some(ClientEvent::Connected) => continue,
-                    _ => {
-                        if let Some(SessionData { username, .. }) = sessions.write().await.remove(&session_id) {
-                            info!("Removed session {session_id} for user {username}");
+                tokio::select! {
+                    _ = &mut session_timer => {
+                        // The session has timed out
+                        if let Some(SessionData { command_channel, username, .. }) = sessions.read().await.get(&session_id) {
+                            info!("Session {session_id} for user {username} has timed out");
+                            command_channel.terminate_client();
                         }
-                        break;
+                        session_timer = disabled_session_timer();
+                    }
+                    client_event = client_events_rx.next() => match client_event {
+                        Some(ClientEvent::Connected) => continue,
+                        _ => {
+                            if let Some(SessionData { username, .. }) = sessions.write().await.remove(&session_id) {
+                                info!("Session {session_id} for user {username} has been removed");
+                            }
+                            break;
+                        }
+                    },
+                    session_event = &mut session_rx.select_next_some() => match session_event {
+                        SessionEvent::Activity => {
+                            // Reset the timer unless there is an active subscription, in which
+                            // case the timer is disabled.
+                            if subscriptions_count == 0 {
+                                session_timer = new_session_timer();
+                            }
+                            debug!("activity, subscriptions count: {subscriptions_count}");
+                        }
+                        SessionEvent::Subscription => {
+                            if subscriptions_count == 0 {
+                                session_timer = disabled_session_timer();
+                            }
+                            subscriptions_count += 1;
+                            debug!("+subscription: {subscriptions_count}");
+                        },
+                        SessionEvent::Unsubscription => {
+                            subscriptions_count -= 1;
+                            if subscriptions_count == 0 {
+                                session_timer = new_session_timer();
+                            }
+                            debug!("-subscription: {subscriptions_count}");
+                        },
                     }
                 }
             }
@@ -183,11 +241,17 @@ struct LoginParams<'r> {
     password: &'r str,
 }
 
+enum SessionEvent {
+    Activity,
+    Subscription,
+    Unsubscription,
+}
+
 #[derive(Clone)]
 struct SessionData {
     command_channel: ClientCommandSender,
+    session_channel: UnboundedSender<SessionEvent>,
     username: String,
-    // events_channel: ClientEventsReceiver,
 }
 
 #[derive(Clone, Default)]
@@ -196,7 +260,7 @@ struct Sessions(pub(crate) Arc<RwLock<HashMap<String, SessionData>>>);
 
 #[post("/logout")]
 async fn api_logout(session: Session) {
-    let Session(_, SessionData { command_channel, username }) = session;
+    let Session(_, SessionData { command_channel, username, .. }) = session;
     info!("Logout session of user `{username}`");
     command_channel.terminate_client();
 }
@@ -227,7 +291,10 @@ fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
 
 #[post("/rpc", data = "<request>")]
 async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<json::Value, ErrorResponse> {
-    let Session(_, SessionData { command_channel, .. }) = session;
+    let Session(_, SessionData { command_channel, session_channel, .. }) = session;
+    session_channel
+        .unbounded_send(SessionEvent::Activity)
+        .unwrap_or_else(|e| error!("Cannot send SessionEvent::Activity: {e}"));
     let request = request
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
     let param = request.param
