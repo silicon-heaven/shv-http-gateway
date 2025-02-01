@@ -155,6 +155,22 @@ async fn api_login(
         }
     }
 
+    // Check the user sessions count limit for this user.
+    // The check is deliberately conducted *after* authentication succeeds to
+    // ensure that unauthorized individuals cannot determine whether the user
+    // has reached the limit.
+    let Sessions(sessions) = sessions.inner();
+    let user_sessions_count = sessions
+        .read()
+        .await
+        .values()
+        .filter(|SessionData { username, .. }| username == params.username)
+        .count() as i32;
+    if user_sessions_count == program_config.max_user_sessions {
+        client_commands_tx.terminate_client();
+        return Err(err_response(Status::Forbidden, "Maximum number of sessions for the user exceeded"));
+    }
+
     // Generate a new session ID
     let Random(random) = random.inner();
     let mut random_bytes = vec![0u8;30];
@@ -163,7 +179,6 @@ async fn api_login(
 
     let (session_tx, mut session_rx) = channel::mpsc::unbounded();
     // Save the session
-    let Sessions(sessions) = sessions.inner();
     sessions.write().await.insert(
         session_id.clone(),
         SessionData {
