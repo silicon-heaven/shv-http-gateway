@@ -142,7 +142,7 @@ async fn api_login(
         .await
         .ok_or_else(|| {
             warn!("Cannot start SHV client for user `{}`", params.username);
-            err_response(Status::ServiceUnavailable, "Cannot connect to the broker")
+            err_response(Status::InternalServerError, "Client task failure")
         })?;
 
     // Wait for the client to connect
