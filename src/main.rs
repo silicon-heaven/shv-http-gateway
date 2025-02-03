@@ -155,14 +155,22 @@ async fn api_login(
         }
     }
 
+    // Generate a new session ID
+    let Random(random) = random.inner();
+    let mut random_bytes = vec![0u8;30];
+    random.lock().await.fill_bytes(&mut random_bytes);
+    let session_id = BASE64_URL_SAFE.encode(random_bytes);
+
+
     // Check the user sessions count limit for this user.
     // The check is deliberately conducted *after* authentication succeeds to
     // ensure that unauthorized individuals cannot determine whether the user
     // has reached the limit.
+    // The check and the write to the sessions store is performed atomically to
+    // avoid a race condition when more clients connect simultaneously.
     let Sessions(sessions) = sessions.inner();
-    let user_sessions_count = sessions
-        .read()
-        .await
+    let mut sessions_wr = sessions.write().await;
+    let user_sessions_count = sessions_wr
         .values()
         .filter(|SessionData { username, .. }| username == params.username)
         .count() as i32;
@@ -170,22 +178,16 @@ async fn api_login(
         client_commands_tx.terminate_client();
         return Err(err_response(Status::Forbidden, "Maximum number of sessions for the user exceeded"));
     }
-
-    // Generate a new session ID
-    let Random(random) = random.inner();
-    let mut random_bytes = vec![0u8;30];
-    random.lock().await.fill_bytes(&mut random_bytes);
-    let session_id = BASE64_URL_SAFE.encode(random_bytes);
-
     let (session_tx, mut session_rx) = channel::mpsc::unbounded();
     // Save the session
-    sessions.write().await.insert(
+    sessions_wr.insert(
         session_id.clone(),
         SessionData {
             command_channel: client_commands_tx,
             session_channel: session_tx,
             username: params.username.into(),
         });
+    drop(sessions_wr);
 
     // Spawn the session task, which maintains the timeout and removes the session when the client terminates
     {
