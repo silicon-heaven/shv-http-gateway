@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use base64::prelude::*;
 use clap::Parser;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, warn, LevelFilter};
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 #[cfg(feature = "webspy")] use rocket::fs::{FileServer,relative};
@@ -16,12 +16,13 @@ use rocket::response::stream::{Event, EventStream};
 use rocket::serde::json::{self, json, Json};
 use rocket::serde::Deserialize;
 use rocket::tokio::time::Duration;
-use rocket::{catch, catchers, launch, post, routes, Request};
+use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
 use shvrpc::RpcMessageMetaTags;
+use simple_logger::SimpleLogger;
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
@@ -378,13 +379,36 @@ struct ProgramConfig {
     session_timeout: Duration,
     #[arg(long, default_value = "60s", value_parser = |val: &str| duration_str::parse_std(val))]
     heartbeat_interval: Duration,
+    #[arg(short = 'v', long = "verbose")]
+    verbose: Option<String>,
+}
+
+fn init_logger(program_config: &ProgramConfig) {
+    let mut logger = SimpleLogger::new();
+    logger = logger.with_level(LevelFilter::Info);
+    if let Some(module_names) = &program_config.verbose {
+        for (module, level) in shvproto::util::parse_log_verbosity(module_names, module_path!()) {
+            if let Some(module) = module {
+                logger = logger.with_module_level(module, level);
+            } else {
+                logger = logger.with_level(level);
+            }
+        }
+    }
+    logger.init().unwrap();
 }
 
 #[launch]
 fn rocket() -> _ {
     let program_config = ProgramConfig::parse();
-    println!("{program_config:?}");
+    init_logger(&program_config);
 
+    info!("{program_config:?}");
+
+    build_rocket(program_config)
+}
+
+pub(crate) fn build_rocket(program_config: ProgramConfig) -> Rocket<Build> {
     let cors = CorsOptions::default()
         .allowed_origins(AllowedOrigins::all())
         .allowed_methods(
@@ -396,6 +420,11 @@ fn rocket() -> _ {
         .allow_credentials(false);
 
     let rocket = rocket::build()
+        .configure(rocket::Config {
+            // We are using our logger implementation
+            log_level: rocket::config::LogLevel::Off,
+            ..Default::default()
+        })
         .attach(cors.to_cors().expect("Cannot set CORS policy"))
         .mount("/api", routes![api_login, api_logout, api_rpc, api_subscribe])
         .register("/", catchers![catch_default])
