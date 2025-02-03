@@ -26,6 +26,8 @@ use simple_logger::SimpleLogger;
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
+#[cfg(test)] mod tests;
+
 pub(crate) async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver)> {
     let (tx, rx) = rocket::futures::channel::oneshot::channel();
     tokio::spawn(async move {
