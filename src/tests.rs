@@ -6,14 +6,13 @@ use const_format::formatcp;
 use rocket::futures::stream::FuturesUnordered;
 use rocket::futures::StreamExt;
 use rocket::http::ContentType;
-use rocket::serde::Deserialize;
 use rocket::local::asynchronous::Client as RocketClient;
 use rocket::http::Status;
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvrpc::client::ClientConfig;
 use url::Url;
 
-use crate::{build_rocket, start_client, LoginResponse, ProgramConfig, RpcResponse};
+use crate::{build_rocket, start_client, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse};
 
 const BROKER_ADDRESS: &str = "127.0.0.1:3755";
 const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
@@ -92,13 +91,6 @@ fn program_config() -> ProgramConfig {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq)]
-#[serde(crate = "rocket::serde")]
-struct ApiErrorResponse {
-    code: u16,
-    detail: String,
-}
-
 #[test]
 fn login_passes() {
     shared_rt_test(async {
@@ -124,11 +116,12 @@ fn login_fails() {
             .dispatch()
             .await;
         assert_eq!(resp.status(), Status::Unauthorized);
-        assert_eq!(ApiErrorResponse {
+        assert_eq!(ErrorResponseBody {
             code: Status::Unauthorized.code,
             detail: "Bad credentials".into(),
+            shv_error: None,
         },
-        resp.into_json::<ApiErrorResponse>().await.unwrap());
+        resp.into_json::<ErrorResponseBody>().await.unwrap());
     });
 }
 
@@ -175,7 +168,8 @@ fn rpc_calls() {
             .await;
         assert_eq!(resp.status(), Status::Ok);
         let result = resp.into_json::<RpcResponse>().await.unwrap().result;
-        log::info!("{result}");
-
+        let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
+        assert!(result_rpcval.is_list());
+        assert!(!result_rpcval.as_list().is_empty(), ".broker:ls should return non-empty list (got: {result})");
     });
 }
