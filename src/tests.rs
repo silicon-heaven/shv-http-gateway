@@ -77,9 +77,7 @@ async fn setup() {
 }
 
 fn shared_rt_test(test_fut: impl Future<Output = ()>) {
-    RUNTIME.block_on(async {
-        test_fut.await
-    });
+    RUNTIME.block_on(test_fut);
 }
 
 
