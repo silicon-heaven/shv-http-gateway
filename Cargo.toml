@@ -21,6 +21,7 @@ base64 = "0.22.1"
 rocket_cors = "0.6.0"
 const_format = "0.2.34"
 simple_logger = { version = "5.0.0", features = ["stderr"] }
+serde = { version = "1.0.217", features = ["derive"] }
 
 [features]
 webspy = []

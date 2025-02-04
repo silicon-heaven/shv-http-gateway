@@ -14,11 +14,11 @@ use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
 use rocket::response::stream::{Event, EventStream};
 use rocket::serde::json::{self, json, Json};
-use rocket::serde::Deserialize;
 use rocket::tokio::time::Duration;
 use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
+use serde::{Deserialize, Serialize};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
 use shvrpc::RpcMessageMetaTags;
@@ -59,7 +59,6 @@ fn err_response<T: AsRef<str>>(status: Status, detail: impl Into<Option<T>>) -> 
 }
 
 #[derive(Deserialize)]
-#[serde(crate = "rocket::serde")]
 struct SubscribeRequest<'t> {
     path: &'t str,
     signal: &'t str,
@@ -116,13 +115,19 @@ async fn api_subscribe(
     Ok(event_stream)
 }
 
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct LoginResponse {
+    session_id: String,
+}
+
 #[post("/login", data = "<params>")]
 async fn api_login(
     params: Result<Json<LoginParams<'_>>, json::Error<'_>>,
     program_config: &State<ProgramConfig>,
     sessions: &State<Sessions>,
     random: &State<Random>,
-) -> Result<json::Value, ErrorResponse>
+) -> Result<Json<LoginResponse>, ErrorResponse>
 {
     let params = params
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
@@ -251,11 +256,10 @@ async fn api_login(
         });
     }
 
-    Ok(json::json!({ "session_id": session_id }))
+    Ok(Json(LoginResponse { session_id }))
 }
 
 #[derive(Deserialize)]
-#[serde(crate = "rocket::serde")]
 struct LoginParams<'r> {
     username: &'r str,
     password: &'r str,
@@ -286,11 +290,16 @@ async fn api_logout(session: Session) {
 }
 
 #[derive(Deserialize)]
-#[serde(crate = "rocket::serde")]
 struct RpcRequest<'t> {
     path: &'t str,
     method: &'t str,
     param: Option<&'t str>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct RpcResponse {
+    result: String,
 }
 
 fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
@@ -310,7 +319,7 @@ fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
 }
 
 #[post("/rpc", data = "<request>")]
-async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<json::Value, ErrorResponse> {
+async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<Json<RpcResponse>, ErrorResponse> {
     let Session(_, SessionData { command_channel, session_channel, .. }) = session;
     session_channel
         .unbounded_send(SessionEvent::Activity)
@@ -327,8 +336,8 @@ async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::E
         .call_rpc_method(request.path, request.method, param)
         .await
         .map_err(err_response_rpc_call)?;
-    Ok(json!({
-        "result": result.to_cpon()
+    Ok(Json(RpcResponse {
+        result: result.to_cpon(),
     }))
 }
 

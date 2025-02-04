@@ -13,7 +13,7 @@ use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvrpc::client::ClientConfig;
 use url::Url;
 
-use crate::{build_rocket, start_client, ProgramConfig};
+use crate::{build_rocket, start_client, LoginResponse, ProgramConfig, RpcResponse};
 
 const BROKER_ADDRESS: &str = "127.0.0.1:3755";
 const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
@@ -153,18 +153,6 @@ fn max_sessions_exceeds() {
         assert_eq!(num_ok_responses as i32, num_of_passing);
         assert_eq!(num_err_responses as i32, num_of_failing);
     });
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-#[serde(crate = "rocket::serde")]
-struct LoginResponse {
-    session_id: String,
-}
-
-#[derive(Deserialize, Debug, PartialEq)]
-#[serde(crate = "rocket::serde")]
-struct RpcResponse {
-    result: String,
 }
 
 #[test]
