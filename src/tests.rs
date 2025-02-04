@@ -90,6 +90,7 @@ fn program_config() -> ProgramConfig {
         session_timeout: Duration::from_secs(60),
         heartbeat_interval: Duration::from_secs(60),
         verbose: None,
+        version: false,
     }
 }
 

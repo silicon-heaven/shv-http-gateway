@@ -392,6 +392,8 @@ struct ProgramConfig {
     heartbeat_interval: Duration,
     #[arg(short = 'v', long = "verbose")]
     verbose: Option<String>,
+    #[arg(short = 'V', long = "version")]
+    version: bool,
 }
 
 fn init_logger(program_config: &ProgramConfig) {
@@ -411,7 +413,14 @@ fn init_logger(program_config: &ProgramConfig) {
 
 #[launch]
 fn rocket() -> _ {
+    static PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
     let program_config = ProgramConfig::parse();
+
+    if program_config.version {
+        println!("{PKG_VERSION}");
+        std::process::exit(0);
+    }
+
     init_logger(&program_config);
 
     info!("{program_config:?}");
