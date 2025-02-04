@@ -411,6 +411,15 @@ fn init_logger(program_config: &ProgramConfig) {
     logger.init().unwrap();
 }
 
+fn print_banner(text: impl AsRef<str>) {
+    let text = text.as_ref();
+    let width = text.len() + 2;
+    let banner_line = format!("{:=^width$}", "");
+    info!("{banner_line}");
+    info!("{text:^width$}");
+    info!("{banner_line}");
+}
+
 #[launch]
 fn rocket() -> _ {
     static PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -423,6 +432,7 @@ fn rocket() -> _ {
 
     init_logger(&program_config);
 
+    print_banner(format!("{} {} starting", std::module_path!(), PKG_VERSION));
     info!("{program_config:?}");
 
     build_rocket(program_config)
@@ -441,7 +451,7 @@ pub(crate) fn build_rocket(program_config: ProgramConfig) -> Rocket<Build> {
 
     let rocket = rocket::build()
         .configure(rocket::Config {
-            // We are using our logger implementation
+            // We are using a custom logger implementation
             log_level: rocket::config::LogLevel::Off,
             ..Default::default()
         })
