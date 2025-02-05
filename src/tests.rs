@@ -8,8 +8,10 @@ use rocket::futures::StreamExt;
 use rocket::http::ContentType;
 use rocket::local::asynchronous::Client as RocketClient;
 use rocket::http::Status;
+use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvrpc::client::ClientConfig;
+use shvrpc::rpcmessage::RpcError;
 use url::Url;
 
 use crate::{build_rocket, start_client, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse};
@@ -95,8 +97,56 @@ fn program_config() -> ProgramConfig {
     }
 }
 
+#[tokio::test]
+async fn err_response() {
+    let (error_status, error_body) = crate::err_response(Status::BadRequest, "Invalid input");
+    assert_eq!(error_status, Status::BadRequest);
+    let body: ErrorResponseBody = serde_json::from_str(&error_body).unwrap();
+    assert_eq!(body.code, Status::BadRequest.code);
+    assert_eq!(body.detail, "Invalid input");
+}
+
+#[tokio::test]
+async fn err_rpc_response() {
+    {
+        let (error_status, error_body) = crate::err_response_rpc_call(
+            CallRpcMethodError::new(
+                "foo/bar",
+                "baz",
+                CallRpcMethodErrorKind::RpcError(RpcError::new(
+                        shvrpc::rpcmessage::RpcErrorCode::MethodNotFound,
+                        "Unknown method")
+                )
+            )
+        );
+        assert_eq!(error_status, Status::InternalServerError);
+        let body: ErrorResponseBody = serde_json::from_str(&error_body).unwrap();
+        assert_eq!(body.code, Status::InternalServerError.code);
+        assert_eq!(body.shv_error, Some("RpcError(MethodNotFound)".into()));
+    }
+    {
+        let (error_status, error_body) = crate::err_response_rpc_call(
+            CallRpcMethodError::new(
+                "foo/bar",
+                "baz",
+                CallRpcMethodErrorKind::ConnectionClosed)
+        );
+        assert_eq!(error_status, Status::InternalServerError);
+        let body: ErrorResponseBody = serde_json::from_str(&error_body).unwrap();
+        assert_eq!(body.code, Status::InternalServerError.code);
+        assert_eq!(body.shv_error, Some("ConnectionClosed".into()));
+    }
+}
+
+#[tokio::test]
+async fn api_login_invalid_request() {
+    let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
+    let response = client.post("/api/login").dispatch().await;
+    assert_eq!(response.status(), Status::UnprocessableEntity);
+}
+
 #[test]
-fn login_passes() {
+fn api_login_passes() {
     shared_rt_test(async {
         let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
         let resp = client
@@ -110,7 +160,7 @@ fn login_passes() {
 }
 
 #[test]
-fn login_fails() {
+fn api_login_fails() {
     shared_rt_test(async {
         let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
         let resp = client
@@ -131,7 +181,7 @@ fn login_fails() {
 
 // NOTE: This test works only if the user used here is not shared with other tests!
 #[test]
-fn max_sessions_exceeds() {
+fn api_login_max_sessions_exceeds() {
     shared_rt_test(async {
         let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
         let req = client
@@ -152,7 +202,7 @@ fn max_sessions_exceeds() {
 }
 
 #[test]
-fn rpc_calls() {
+fn api_rpc_calls() {
     shared_rt_test(async {
         let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
         let resp = client

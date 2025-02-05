@@ -1822,7 +1822,7 @@ checksum = "b5aba8db14291edd000dfcc4d620c7ebfb122c613afb886ca8803fa4e128a20a"
 [[package]]
 name = "libshvproto-macros"
 version = "0.1.3"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#4b91a8b5616390310004c6e673ce69aa5f30f89a"
+source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#6e941f2cf62c3eb3dae04d7edb45d7a199269abf"
 dependencies = [
  "convert_case",
  "proc-macro2",
@@ -3073,8 +3073,8 @@ dependencies = [
 
 [[package]]
 name = "shvclient"
-version = "0.3.17"
-source = "git+https://github.com/silicon-heaven/libshvclient-rs?branch=main#4e141a91041df7972289b40316d83cdaaa5d9209"
+version = "0.3.18"
+source = "git+https://github.com/silicon-heaven/libshvclient-rs?branch=main#b10ada148da3d3c78c7f14fe42b858917d00f4a9"
 dependencies = [
  "async-broadcast",
  "duration-str",
@@ -3092,7 +3092,7 @@ dependencies = [
 [[package]]
 name = "shvproto"
 version = "3.1.0"
-source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#4b91a8b5616390310004c6e673ce69aa5f30f89a"
+source = "git+https://github.com/silicon-heaven/libshvproto-rs?branch=master#6e941f2cf62c3eb3dae04d7edb45d7a199269abf"
 dependencies = [
  "bytes",
  "chrono",

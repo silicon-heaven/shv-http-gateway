@@ -9,7 +9,7 @@ shvbroker = { git = "https://github.com/silicon-heaven/shvbroker-rs", branch = "
 [dependencies]
 shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.1.0" }
 shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.1.0" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.3.17", features = ["tokio"] }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.3.18", features = ["tokio"] }
 rocket = { version = "0.5.1", features = ["tls", "json"] }
 tokio = { version = "1.43.0", features = ["net", "time"] }
 log = "0.4.25"
