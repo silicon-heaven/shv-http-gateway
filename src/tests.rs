@@ -14,7 +14,7 @@ use url::Url;
 
 use crate::{build_rocket, start_client, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse};
 
-const BROKER_ADDRESS: &str = "127.0.0.1:3755";
+const BROKER_ADDRESS: &str = "127.0.0.1:37567";
 const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
 const BROKER_URL_WITH_CREDENTIALS: &str = formatcp!("tcp://admin:admin@{BROKER_ADDRESS}");
 
@@ -22,7 +22,11 @@ async fn start_broker() {
     let mut broker_config = shvbroker::config::BrokerConfig::default();
     broker_config.listen.tcp = Some(BROKER_ADDRESS.into());
     let access_config = broker_config.access.clone();
-    tokio::spawn(shvbroker::brokerimpl::accept_loop(broker_config, access_config, None));
+    tokio::spawn(async {
+        shvbroker::brokerimpl::accept_loop(broker_config, access_config, None)
+            .await
+            .expect("broker accept_loop failed")
+    });
     // Wait for the broker
     let start = tokio::time::Instant::now();
     while start.elapsed() < tokio::time::Duration::from_secs(5) {
