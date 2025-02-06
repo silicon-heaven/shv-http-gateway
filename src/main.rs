@@ -13,7 +13,7 @@ use rocket::futures::StreamExt;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
 use rocket::response::stream::{Event, EventStream};
-use rocket::serde::json::{self, json, Json};
+use rocket::serde::json::{self, Json};
 use rocket::tokio::time::Duration;
 use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
@@ -21,6 +21,7 @@ use rocket_cors::{AllowedOrigins, CorsOptions};
 use serde::{Deserialize, Serialize};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
+use shvrpc::rpc::ShvRI;
 use shvrpc::RpcMessageMetaTags;
 use simple_logger::SimpleLogger;
 use tokio::sync::{Mutex, RwLock};
@@ -70,9 +71,18 @@ fn err_response<T: AsRef<str>>(status: Status, detail: impl Into<Option<T>>) -> 
 
 #[derive(Deserialize)]
 struct SubscribeRequest<'t> {
-    path: &'t str,
-    signal: &'t str,
+    shv_ri: &'t str,
 }
+
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Debug, Deserialize, PartialEq))]
+struct SubscribeEvent {
+    path: Option<String>,
+    signal: Option<String>,
+    param: Option<String>,
+}
+
 
 #[post("/subscribe", data = "<request>")]
 async fn api_subscribe(
@@ -81,10 +91,13 @@ async fn api_subscribe(
 ) -> Result<EventStream![], ErrorResponse>
 {
     let Session(_session_id, SessionData { command_channel, session_channel, .. }) = session;
-    let Json(SubscribeRequest { path, signal }) = request
+    let Json(SubscribeRequest { shv_ri }) = request
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
+    let shv_ri = ShvRI::try_from(shv_ri)
+        .map_err(|e| err_response(Status::UnprocessableEntity, e))?;
     let mut subscriber = command_channel
-        .subscribe(path, signal)
+        .subscribe(shv_ri)
+        .await
         .map_err(|e| err_response(Status::InternalServerError, e.to_string()))?;
 
     struct UnsubscribeNotifier(UnboundedSender<SessionEvent>);
@@ -111,11 +124,11 @@ async fn api_subscribe(
                             warn!("Received invalid RPC frame in notification: {e}\nframe: {frame}");
                             yield Event::data(e.to_string()).event("error");
                         }
-                        Ok(msg) => yield Event::json(&json!({
-                            "path": msg.shv_path(),
-                            "signal": msg.method(),
-                            "param": msg.param().map(shvproto::RpcValue::to_cpon),
-                        })),
+                        Ok(msg) => yield Event::json(&SubscribeEvent{
+                            path: msg.shv_path().map(String::from),
+                            signal: msg.method().map(String::from),
+                            param: msg.param().map(shvproto::RpcValue::to_cpon),
+                        }),
                     }
 
                 }
@@ -164,7 +177,7 @@ async fn api_login(
 
     // Wait for the client to connect
     match client_events_rx.next().await {
-        Some(ClientEvent::Connected) => { },
+        Some(ClientEvent::Connected(_)) => { }
         None | Some(ClientEvent::Disconnected) | Some(ClientEvent::ConnectionFailed(ConnectionFailedKind::NetworkError)) => {
             return Err(err_response(Status::ServiceUnavailable, "Connection to the broker failed"));
         }
@@ -229,7 +242,7 @@ async fn api_login(
                         session_timer = disabled_session_timer();
                     }
                     client_event = client_events_rx.next() => match client_event {
-                        Some(ClientEvent::Connected) => continue,
+                        Some(ClientEvent::Connected(_)) => continue,
                         _ => {
                             if let Some(SessionData { username, .. }) = sessions.write().await.remove(&session_id) {
                                 info!("Session {session_id} for user {username} has been removed");

@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use const_format::formatcp;
-use log::{error, warn};
+use log::{error, info, warn};
 use rocket::futures::stream::FuturesUnordered;
 use rocket::futures::StreamExt;
 use rocket::http::ContentType;
@@ -15,9 +15,10 @@ use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
 use shvrpc::rpcmessage::RpcError;
+use tokio_util::compat::TokioAsyncReadCompatExt;
 use url::Url;
 
-use crate::{build_rocket, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse};
+use crate::{build_rocket, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse, SubscribeEvent};
 
 const BROKER_ADDRESS: &str = "127.0.0.1:37567";
 const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
@@ -53,7 +54,7 @@ async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsRece
             heartbeat_interval: Duration::from_secs(60),
             reconnect_interval: None,
         };
-        shvclient::client::Client::new(DotAppNode::new("testing_client"))
+        shvclient::client::Client::<_,()>::new(DotAppNode::new("testing_client"))
             .mount("value", shvclient::fixed_node! (
                     value_node(request, _tx) {
                         "echo" [IsGetter, Read, "", ""] (param: i32) => {
@@ -61,13 +62,29 @@ async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsRece
                         }
                     })
             )
-            .with_app_state(shvclient::AppState::new(()))
-            .run_with_init(&client_config, |commands_tx, events_rx|
+            .run_with_init(&client_config, |commands_tx, events_rx| {
+                {
+                    let commands_tx = commands_tx.clone();
+                    let mut events_rx = events_rx.clone();
+                    tokio::spawn(async move {
+                        match events_rx.wait_for_event().await {
+                            Ok(shvclient::ClientEvent::Connected(_)) => { }
+                            _ => return,
+                        }
+                        let mut interval = tokio::time::interval(Duration::from_millis(100));
+                        loop {
+                            interval.tick().await;
+                            let sig = shvrpc::RpcMessage::new_signal("value", "event", Some(42.into()));
+                            commands_tx.send_message(sig).unwrap_or_else(|_| error!("Cannot send signal"));
+                        }
+                    });
+                }
                 tx.send((commands_tx, events_rx))
                 .unwrap_or_else(|(commands_tx, _)| {
                     warn!("Client channels dropped before handed to the caller. Terminating the client");
                     commands_tx.terminate_client();
                 })
+            }
             )
             .await
             .unwrap_or_else(|e| error!("Client finished with error: {e}"));
@@ -102,7 +119,7 @@ async fn setup() {
     let (_c, mut e)  = start_testing_client().await.unwrap();
     let res = e.wait_for_event().await.unwrap();
     match res {
-        shvclient::ClientEvent::Connected => {}
+        shvclient::ClientEvent::Connected(_) => {}
         _ => panic!("Testing device cannot connect to the broker"),
     }
 }
@@ -300,6 +317,64 @@ fn api_rpc_calls() {
             let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
             assert!(result_rpcval.is_int());
             assert_eq!(result_rpcval.as_int(), arg, "value:read should return {arg})");
+        }
+    });
+}
+
+#[test]
+fn api_subscribe() {
+    shared_rt_test(async {
+        let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
+
+        let resp = client
+            .post("/api/login")
+            .header(ContentType::JSON)
+            .body(r#"{"username": "admin", "password": "admin"}"#)
+            .dispatch()
+            .await;
+        let session_id = resp.into_json::<LoginResponse>().await.unwrap().session_id;
+
+        let resp = client
+            .post("/api/subscribe")
+            .header(ContentType::JSON)
+            .header(rocket::http::Header::new("Authorization", session_id.clone()))
+            .body(r#"{"shv_ri": "test/device/value:*:*"}"#)
+            .dispatch()
+            .await;
+
+        assert!(resp.content_type().unwrap().is_event_stream());
+
+        // let mut reader = tokio::io::BufReader::new(resp).lines();
+        // for i in 0..5 {
+        //     warn!("receiving event {i}");
+        //     let event = reader
+        //         .next_line()
+        //         .await
+        //         .expect("Read line error")
+        //         .expect("Unexpected end of stream");
+        //     warn!("{event}");
+        // }
+
+        let mut reader = sse_codec::decode_stream(tokio::io::BufReader::new(resp).compat());
+        for i in 0..10 {
+            info!("receiving event {i}");
+            let event = reader
+                .next()
+                .await
+                .expect("Unexpected end of stream")
+                .unwrap_or_else(|e| panic!("Unexpected error in event stream: {e}"));
+            match event {
+                sse_codec::Event::Message{ id, event, data, ..} => {
+                    info!("{data}");
+                    assert!(id.is_none());
+                    assert_eq!(event, "message");
+                    let parsed_data: SubscribeEvent = serde_json::from_str(&data).unwrap();
+                    assert_eq!(parsed_data.path, Some("test/device/value".into()));
+                    assert_eq!(parsed_data.signal, Some("event".into()));
+                    assert_eq!(parsed_data.param, Some(RpcValue::from(42).to_cpon()));
+                }
+                _ => panic!("Unexpected event"),
+            }
         }
     });
 }
