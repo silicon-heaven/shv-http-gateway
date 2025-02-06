@@ -3,18 +3,21 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use const_format::formatcp;
+use log::{error, warn};
 use rocket::futures::stream::FuturesUnordered;
 use rocket::futures::StreamExt;
 use rocket::http::ContentType;
 use rocket::local::asynchronous::Client as RocketClient;
 use rocket::http::Status;
+use shvclient::appnodes::DotAppNode;
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
+use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
 use shvrpc::rpcmessage::RpcError;
 use url::Url;
 
-use crate::{build_rocket, start_client, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse};
+use crate::{build_rocket, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse};
 
 const BROKER_ADDRESS: &str = "127.0.0.1:37567";
 const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
@@ -40,14 +43,37 @@ async fn start_broker() {
     panic!("Could not start the broker");
 }
 
-async fn start_testing_device() -> Option<(ClientCommandSender, ClientEventsReceiver)> {
-    start_client(ClientConfig {
-        url: Url::parse(BROKER_URL_WITH_CREDENTIALS).unwrap(),
-        device_id: Some("test".into()),
-        mount: None,
-        heartbeat_interval: Duration::from_secs(60),
-        reconnect_interval: None,
-    }).await
+async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsReceiver)> {
+    let (tx, rx) = rocket::futures::channel::oneshot::channel();
+    tokio::spawn(async {
+        let client_config = ClientConfig {
+            url: Url::parse(BROKER_URL_WITH_CREDENTIALS).unwrap(),
+            device_id: Some("test-device".into()),
+            mount: None,
+            heartbeat_interval: Duration::from_secs(60),
+            reconnect_interval: None,
+        };
+        shvclient::client::Client::new(DotAppNode::new("testing_client"))
+            .mount("value", shvclient::fixed_node! (
+                    value_node(request, _tx) {
+                        "echo" [IsGetter, Read, "", ""] (param: i32) => {
+                            Some(Ok(RpcValue::from(param)))
+                        }
+                    })
+            )
+            .with_app_state(shvclient::AppState::new(()))
+            .run_with_init(&client_config, |commands_tx, events_rx|
+                tx.send((commands_tx, events_rx))
+                .unwrap_or_else(|(commands_tx, _)| {
+                    warn!("Client channels dropped before handed to the caller. Terminating the client");
+                    commands_tx.terminate_client();
+                })
+            )
+            .await
+            .unwrap_or_else(|e| error!("Client finished with error: {e}"));
+        }
+    );
+    rx.await.ok()
 }
 
 // Define common runtime for the tests.
@@ -73,7 +99,7 @@ async fn setup() {
 
     start_broker().await;
 
-    let (_c, mut e)  = start_testing_device().await.unwrap();
+    let (_c, mut e)  = start_testing_client().await.unwrap();
     let res = e.wait_for_event().await.unwrap();
     match res {
         shvclient::ClientEvent::Connected => {}
@@ -145,6 +171,16 @@ async fn api_login_invalid_request() {
     assert_eq!(response.status(), Status::UnprocessableEntity);
 }
 
+#[tokio::test]
+async fn api_rpc_missing_auth_header() {
+    let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
+    let response = client
+        .post("/api/rpc")
+        .header(ContentType::JSON)
+        .dispatch().await;
+    assert_eq!(response.status(), Status::BadRequest);
+}
+
 #[test]
 fn api_login_passes() {
     shared_rt_test(async {
@@ -205,6 +241,7 @@ fn api_login_max_sessions_exceeds() {
 fn api_rpc_calls() {
     shared_rt_test(async {
         let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
+
         let resp = client
             .post("/api/login")
             .header(ContentType::JSON)
@@ -213,17 +250,56 @@ fn api_rpc_calls() {
             .await;
         let session_id = resp.into_json::<LoginResponse>().await.unwrap().session_id;
 
-        let resp = client
-            .post("/api/rpc")
-            .header(rocket::http::Header::new("Authorization", session_id))
-            .header(ContentType::JSON)
-            .body(r#"{"path": ".broker", "method": "ls"}"#)
-            .dispatch()
-            .await;
-        assert_eq!(resp.status(), Status::Ok);
-        let result = resp.into_json::<RpcResponse>().await.unwrap().result;
-        let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
-        assert!(result_rpcval.is_list());
-        assert!(!result_rpcval.as_list().is_empty(), ".broker:ls should return non-empty list (got: {result})");
+        struct RpcCallDispatcher {
+            client: RocketClient,
+            session_id: String,
+        }
+        impl RpcCallDispatcher {
+            async fn call(&self, path: impl AsRef<str>, method: impl AsRef<str>, param: Option<impl std::fmt::Display>) -> rocket::local::asynchronous::LocalResponse<'_> {
+                let path = path.as_ref();
+                let method = method.as_ref();
+                let body = if let Some(param) = param {
+                    format!(r#"{{"path": "{path}", "method": "{method}", "param": "{param}"}}"#)
+                } else {
+                    format!(r#"{{"path": "{path}", "method": "{method}"}}"#)
+                };
+                self.client
+                    .post("/api/rpc")
+                    .header(rocket::http::Header::new("Authorization", self.session_id.clone()))
+                    .header(ContentType::JSON)
+                    .body(body)
+                    .dispatch()
+                    .await
+            }
+        }
+
+        {
+            let resp = client
+                .post("/api/rpc")
+                .header(rocket::http::Header::new("Authorization", session_id.clone()))
+                .header(ContentType::JSON)
+                .body(r#"{"abc": "def"}"#)
+                .dispatch()
+                .await;
+            assert_eq!(resp.status(), Status::UnprocessableEntity);
+        }
+        let rpc_call_dispatcher = RpcCallDispatcher { client, session_id };
+        {
+            let resp = rpc_call_dispatcher.call(".broker", "ls", None::<&str>).await;
+            assert_eq!(resp.status(), Status::Ok);
+            let result = resp.into_json::<RpcResponse>().await.unwrap().result;
+            let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
+            assert!(result_rpcval.is_list());
+            assert!(!result_rpcval.as_list().is_empty(), ".broker:ls should return non-empty list (got: {result})");
+        }
+        {
+            let arg = 42;
+            let resp = rpc_call_dispatcher.call("test/device/value", "echo", Some(arg)).await;
+            assert_eq!(resp.status(), Status::Ok);
+            let result = resp.into_json::<RpcResponse>().await.unwrap().result;
+            let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
+            assert!(result_rpcval.is_int());
+            assert_eq!(result_rpcval.as_int(), arg, "value:read should return {arg})");
+        }
     });
 }

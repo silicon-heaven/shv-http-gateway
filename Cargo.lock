@@ -3073,8 +3073,8 @@ dependencies = [
 
 [[package]]
 name = "shvclient"
-version = "0.3.18"
-source = "git+https://github.com/silicon-heaven/libshvclient-rs?branch=main#b10ada148da3d3c78c7f14fe42b858917d00f4a9"
+version = "0.3.19"
+source = "git+https://github.com/silicon-heaven/libshvclient-rs?branch=main#384126579686e943029a5fa3e8a16446c0549bed"
 dependencies = [
  "async-broadcast",
  "duration-str",
