@@ -483,7 +483,7 @@ pub(crate) fn build_rocket(program_config: ProgramConfig) -> Rocket<Build> {
         .register("/", catchers![catch_default])
         .manage(program_config)
         .manage(Sessions::default())
-        .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_entropy()))));
+        .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_os_rng()))));
 
     #[cfg(feature = "webspy")]
     let rocket = rocket.mount("/webspy", FileServer::from(relative!("webspy/dist")));
