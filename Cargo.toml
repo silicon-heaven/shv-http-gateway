@@ -1,12 +1,17 @@
 [package]
 name = "shv-http-gateway"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
+[dev-dependencies]
+shvbroker = { git = "https://github.com/silicon-heaven/shvbroker-rs", branch = "master" }
+sse-codec = "0.3.2"
+tokio-util = { version = "0.7.13", features = ["compat"] }
+
 [dependencies]
-shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.0.16" }
-shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.0.21" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.3.15", features = ["tokio"] }
+shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.1.0" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.1.0" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.4", features = ["tokio"] }
 rocket = { version = "0.5.1", features = ["tls", "json"] }
 tokio = { version = "1.43.0", features = ["net", "time"] }
 log = "0.4.25"
@@ -16,6 +21,10 @@ clap = { version = "4.5.26", features = ["derive"] }
 duration-str = "0.12.0"
 base64 = "0.22.1"
 rocket_cors = "0.6.0"
+const_format = "0.2.34"
+simple_logger = { version = "5.0.0", features = ["stderr"] }
+serde = { version = "1.0.217", features = ["derive"] }
+serde_json = "1.0.138"
 
 [features]
 webspy = []

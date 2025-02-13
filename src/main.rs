@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use base64::prelude::*;
 use clap::Parser;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, warn, LevelFilter};
 use rand_chacha::rand_core::{RngCore, SeedableRng};
 use rand_chacha::ChaChaRng;
 #[cfg(feature = "webspy")] use rocket::fs::{FileServer,relative};
@@ -13,19 +13,23 @@ use rocket::futures::StreamExt;
 use rocket::http::Status;
 use rocket::request::{FromRequest, Outcome};
 use rocket::response::stream::{Event, EventStream};
-use rocket::serde::json::{self, json, Json};
-use rocket::serde::Deserialize;
+use rocket::serde::json::{self, Json};
 use rocket::tokio::time::Duration;
-use rocket::{catch, catchers, launch, post, routes, Request};
+use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
+use serde::{Deserialize, Serialize};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
+use shvrpc::rpc::ShvRI;
 use shvrpc::RpcMessageMetaTags;
+use simple_logger::SimpleLogger;
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
 
-pub(crate) async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver)> {
+#[cfg(test)] mod tests;
+
+async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver)> {
     let (tx, rx) = rocket::futures::channel::oneshot::channel();
     tokio::spawn(async move {
         shvclient::client::Client::new_plain()
@@ -45,22 +49,40 @@ pub(crate) async fn start_client(config: shvrpc::client::ClientConfig) -> Option
 
 type ErrorResponse = (Status, String);
 
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct ErrorResponseBody {
+    code: u16,
+    detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shv_error: Option<String>,
+}
+
 fn err_response<T: AsRef<str>>(status: Status, detail: impl Into<Option<T>>) -> ErrorResponse {
     (
         status,
-        json!({
-            "code": status.code,
-            "detail": detail.into().map(|v| v.as_ref().to_string()),
-        }).to_string()
+        serde_json::to_string(&ErrorResponseBody {
+            code: status.code,
+            detail: detail.into().map_or_else(|| "Unspecified reason".to_string(), |v| v.as_ref().to_string()),
+            shv_error: None,
+        }).expect("ErrorResponseBody serialization should not fail")
     )
 }
 
 #[derive(Deserialize)]
-#[serde(crate = "rocket::serde")]
 struct SubscribeRequest<'t> {
-    path: &'t str,
-    signal: &'t str,
+    shv_ri: &'t str,
 }
+
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Debug, Deserialize, PartialEq))]
+struct SubscribeEvent {
+    path: Option<String>,
+    signal: Option<String>,
+    param: Option<String>,
+}
+
 
 #[post("/subscribe", data = "<request>")]
 async fn api_subscribe(
@@ -69,10 +91,13 @@ async fn api_subscribe(
 ) -> Result<EventStream![], ErrorResponse>
 {
     let Session(_session_id, SessionData { command_channel, session_channel, .. }) = session;
-    let Json(SubscribeRequest { path, signal }) = request
+    let Json(SubscribeRequest { shv_ri }) = request
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
+    let shv_ri = ShvRI::try_from(shv_ri)
+        .map_err(|e| err_response(Status::UnprocessableEntity, e))?;
     let mut subscriber = command_channel
-        .subscribe(path, signal)
+        .subscribe(shv_ri)
+        .await
         .map_err(|e| err_response(Status::InternalServerError, e.to_string()))?;
 
     struct UnsubscribeNotifier(UnboundedSender<SessionEvent>);
@@ -99,11 +124,11 @@ async fn api_subscribe(
                             warn!("Received invalid RPC frame in notification: {e}\nframe: {frame}");
                             yield Event::data(e.to_string()).event("error");
                         }
-                        Ok(msg) => yield Event::json(&json!({
-                            "path": msg.shv_path(),
-                            "signal": msg.method(),
-                            "param": msg.param().map(shvproto::RpcValue::to_cpon),
-                        })),
+                        Ok(msg) => yield Event::json(&SubscribeEvent{
+                            path: msg.shv_path().map(String::from),
+                            signal: msg.method().map(String::from),
+                            param: msg.param().map(shvproto::RpcValue::to_cpon),
+                        }),
                     }
 
                 }
@@ -113,13 +138,19 @@ async fn api_subscribe(
     Ok(event_stream)
 }
 
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct LoginResponse {
+    session_id: String,
+}
+
 #[post("/login", data = "<params>")]
 async fn api_login(
     params: Result<Json<LoginParams<'_>>, json::Error<'_>>,
     program_config: &State<ProgramConfig>,
     sessions: &State<Sessions>,
     random: &State<Random>,
-) -> Result<json::Value, ErrorResponse>
+) -> Result<Json<LoginResponse>, ErrorResponse>
 {
     let params = params
         .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
@@ -141,12 +172,12 @@ async fn api_login(
         .await
         .ok_or_else(|| {
             warn!("Cannot start SHV client for user `{}`", params.username);
-            err_response(Status::ServiceUnavailable, "Cannot connect to the broker")
+            err_response(Status::InternalServerError, "Client task failure")
         })?;
 
     // Wait for the client to connect
     match client_events_rx.next().await {
-        Some(ClientEvent::Connected) => { },
+        Some(ClientEvent::Connected(_)) => { }
         None | Some(ClientEvent::Disconnected) | Some(ClientEvent::ConnectionFailed(ConnectionFailedKind::NetworkError)) => {
             return Err(err_response(Status::ServiceUnavailable, "Connection to the broker failed"));
         }
@@ -211,7 +242,7 @@ async fn api_login(
                         session_timer = disabled_session_timer();
                     }
                     client_event = client_events_rx.next() => match client_event {
-                        Some(ClientEvent::Connected) => continue,
+                        Some(ClientEvent::Connected(_)) => continue,
                         _ => {
                             if let Some(SessionData { username, .. }) = sessions.write().await.remove(&session_id) {
                                 info!("Session {session_id} for user {username} has been removed");
@@ -248,11 +279,10 @@ async fn api_login(
         });
     }
 
-    Ok(json::json!({ "session_id": session_id }))
+    Ok(Json(LoginResponse { session_id }))
 }
 
 #[derive(Deserialize)]
-#[serde(crate = "rocket::serde")]
 struct LoginParams<'r> {
     username: &'r str,
     password: &'r str,
@@ -283,31 +313,36 @@ async fn api_logout(session: Session) {
 }
 
 #[derive(Deserialize)]
-#[serde(crate = "rocket::serde")]
 struct RpcRequest<'t> {
     path: &'t str,
     method: &'t str,
     param: Option<&'t str>,
 }
 
+#[derive(Deserialize, Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct RpcResponse {
+    result: String,
+}
+
 fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
     (
         Status::InternalServerError,
-        json!({
-            "code": Status::InternalServerError.code,
-            "shv_error": match e.error() {
+        serde_json::to_string(&ErrorResponseBody {
+            code: Status::InternalServerError.code,
+            shv_error: Some(match e.error() {
                 CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed".to_string(),
                 CallRpcMethodErrorKind::InvalidMessage(_) => "InvalidMessage".to_string(),
                 CallRpcMethodErrorKind::RpcError(rpc_err) => format!("RpcError({})", rpc_err.code),
                 CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch".to_string(),
-            },
-            "detail": e.to_string(),
-        }).to_string()
+            }),
+            detail: e.to_string(),
+        }).expect("ErrorResponseBody serialization should not fail")
     )
 }
 
 #[post("/rpc", data = "<request>")]
-async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<json::Value, ErrorResponse> {
+async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<Json<RpcResponse>, ErrorResponse> {
     let Session(_, SessionData { command_channel, session_channel, .. }) = session;
     session_channel
         .unbounded_send(SessionEvent::Activity)
@@ -324,8 +359,8 @@ async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::E
         .call_rpc_method(request.path, request.method, param)
         .await
         .map_err(err_response_rpc_call)?;
-    Ok(json!({
-        "result": result.to_cpon()
+    Ok(Json(RpcResponse {
+        result: result.to_cpon(),
     }))
 }
 
@@ -378,13 +413,55 @@ struct ProgramConfig {
     session_timeout: Duration,
     #[arg(long, default_value = "60s", value_parser = |val: &str| duration_str::parse_std(val))]
     heartbeat_interval: Duration,
+    #[arg(short = 'v', long = "verbose")]
+    verbose: Option<String>,
+    #[arg(short = 'V', long = "version")]
+    version: bool,
+}
+
+fn init_logger(program_config: &ProgramConfig) {
+    let mut logger = SimpleLogger::new();
+    logger = logger.with_level(LevelFilter::Info);
+    if let Some(module_names) = &program_config.verbose {
+        for (module, level) in shvproto::util::parse_log_verbosity(module_names, module_path!()) {
+            if let Some(module) = module {
+                logger = logger.with_module_level(module, level);
+            } else {
+                logger = logger.with_level(level);
+            }
+        }
+    }
+    logger.init().unwrap();
+}
+
+fn print_banner(text: impl AsRef<str>) {
+    let text = text.as_ref();
+    let width = text.len() + 2;
+    let banner_line = format!("{:=^width$}", "");
+    info!("{banner_line}");
+    info!("{text:^width$}");
+    info!("{banner_line}");
 }
 
 #[launch]
 fn rocket() -> _ {
+    static PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
     let program_config = ProgramConfig::parse();
-    println!("{program_config:?}");
 
+    if program_config.version {
+        println!("{PKG_VERSION}");
+        std::process::exit(0);
+    }
+
+    init_logger(&program_config);
+
+    print_banner(format!("{} {} starting", std::module_path!(), PKG_VERSION));
+    info!("{program_config:?}");
+
+    build_rocket(program_config)
+}
+
+pub(crate) fn build_rocket(program_config: ProgramConfig) -> Rocket<Build> {
     let cors = CorsOptions::default()
         .allowed_origins(AllowedOrigins::all())
         .allowed_methods(
@@ -396,6 +473,11 @@ fn rocket() -> _ {
         .allow_credentials(false);
 
     let rocket = rocket::build()
+        .configure(rocket::Config {
+            // We are using a custom logger implementation
+            log_level: rocket::config::LogLevel::Off,
+            ..Default::default()
+        })
         .attach(cors.to_cors().expect("Cannot set CORS policy"))
         .mount("/api", routes![api_login, api_logout, api_rpc, api_subscribe])
         .register("/", catchers![catch_default])
