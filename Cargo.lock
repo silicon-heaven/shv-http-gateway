@@ -3059,14 +3059,14 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shv-http-gateway"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "base64 0.22.1",
  "clap",
  "const_format",
  "duration-str",
  "log",
- "rand_chacha 0.3.1",
+ "rand_chacha 0.9.0",
  "rocket",
  "rocket_cors",
  "serde",
