@@ -1,9 +1,10 @@
 use std::future::Future;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use const_format::formatcp;
 use log::{error, info, warn};
+use rocket::futures::future::join_all;
 use rocket::futures::stream::FuturesUnordered;
 use rocket::futures::StreamExt;
 use rocket::http::ContentType;
@@ -232,6 +233,29 @@ fn api_login_fails() {
     });
 }
 
+#[test]
+fn api_login_and_logout() {
+    shared_rt_test(async {
+        let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
+
+        let resp = client
+            .post("/api/login")
+            .header(ContentType::JSON)
+            .body(r#"{"username": "admin", "password": "admin"}"#)
+            .dispatch()
+            .await;
+        assert_eq!(resp.status(), Status::Ok);
+        let session_id = resp.into_json::<LoginResponse>().await.unwrap().session_id;
+
+        let resp = client
+            .post("/api/logout")
+            .header(rocket::http::Header::new("Authorization", session_id))
+            .dispatch()
+            .await;
+        assert_eq!(resp.status(), Status::Ok);
+    });
+}
+
 // NOTE: This test works only if the user used here is not shared with other tests!
 #[test]
 fn api_login_max_sessions_exceeds() {
@@ -290,6 +314,19 @@ fn api_rpc_calls() {
             }
         }
 
+        // Wrong session token
+        {
+            let resp = client
+                .post("/api/rpc")
+                .header(rocket::http::Header::new("Authorization", "wrong_token"))
+                .header(ContentType::JSON)
+                .body(r#"{"path": ".broker", "method": "anything"}"#)
+                .dispatch()
+                .await;
+            assert_eq!(resp.status(), Status::Unauthorized);
+        }
+
+        // Wrong body format
         {
             let resp = client
                 .post("/api/rpc")
@@ -300,6 +337,8 @@ fn api_rpc_calls() {
                 .await;
             assert_eq!(resp.status(), Status::UnprocessableEntity);
         }
+
+        // Regular calls
         let rpc_call_dispatcher = RpcCallDispatcher { client, session_id };
         {
             let resp = rpc_call_dispatcher.call(".broker", "ls", None::<&str>).await;
@@ -324,7 +363,7 @@ fn api_rpc_calls() {
 #[test]
 fn api_subscribe() {
     shared_rt_test(async {
-        let client = RocketClient::untracked(build_rocket(program_config())).await.unwrap();
+        let client = Arc::new(RocketClient::untracked(build_rocket(program_config())).await.unwrap());
 
         let resp = client
             .post("/api/login")
@@ -334,47 +373,58 @@ fn api_subscribe() {
             .await;
         let session_id = resp.into_json::<LoginResponse>().await.unwrap().session_id;
 
-        let resp = client
-            .post("/api/subscribe")
-            .header(ContentType::JSON)
-            .header(rocket::http::Header::new("Authorization", session_id.clone()))
-            .body(r#"{"shv_ri": "test/device/value:*:*"}"#)
-            .dispatch()
-            .await;
+        let mut tasks = vec![];
+        for task_id in 0..10 {
+            let client = client.clone();
+            let session_id = session_id.clone();
+            let task = tokio::spawn(async move {
+                let req = client
+                    .post("/api/subscribe")
+                    .header(ContentType::JSON)
+                    .header(rocket::http::Header::new("Authorization", session_id))
+                    .body(format!(r#"{{"shv_ri": "{}:*:*"}}"#,
+                            if task_id < 5 { "test/device/value" } else { "test/*" }
+                    ))
+                    .dispatch();
+                let resp = req.await;
 
-        assert!(resp.content_type().unwrap().is_event_stream());
+                assert!(resp.content_type().unwrap().is_event_stream());
 
-        // let mut reader = tokio::io::BufReader::new(resp).lines();
-        // for i in 0..5 {
-        //     warn!("receiving event {i}");
-        //     let event = reader
-        //         .next_line()
-        //         .await
-        //         .expect("Read line error")
-        //         .expect("Unexpected end of stream");
-        //     warn!("{event}");
-        // }
+                // let mut reader = tokio::io::BufReader::new(resp).lines();
+                // for i in 0..5 {
+                //     warn!("receiving event {i}");
+                //     let event = reader
+                //         .next_line()
+                //         .await
+                //         .expect("Read line error")
+                //         .expect("Unexpected end of stream");
+                //     warn!("{event}");
+                // }
 
-        let mut reader = sse_codec::decode_stream(tokio::io::BufReader::new(resp).compat());
-        for i in 0..10 {
-            info!("receiving event {i}");
-            let event = reader
-                .next()
-                .await
-                .expect("Unexpected end of stream")
-                .unwrap_or_else(|e| panic!("Unexpected error in event stream: {e}"));
-            match event {
-                sse_codec::Event::Message{ id, event, data, ..} => {
-                    info!("{data}");
-                    assert!(id.is_none());
-                    assert_eq!(event, "message");
-                    let parsed_data: SubscribeEvent = serde_json::from_str(&data).unwrap();
-                    assert_eq!(parsed_data.path, Some("test/device/value".into()));
-                    assert_eq!(parsed_data.signal, Some("event".into()));
-                    assert_eq!(parsed_data.param, Some(RpcValue::from(42).to_cpon()));
+                let mut reader = sse_codec::decode_stream(tokio::io::BufReader::new(resp).compat());
+                for i in 0..10 {
+                    info!("task {task_id}, receiving event {i}");
+                    let event = reader
+                        .next()
+                        .await
+                        .expect("Unexpected end of stream")
+                        .unwrap_or_else(|e| panic!("Unexpected error in event stream: {e}"));
+                    match event {
+                        sse_codec::Event::Message{ id, event, data, ..} => {
+                            info!("{data}");
+                            assert!(id.is_none());
+                            assert_eq!(event, "message");
+                            let parsed_data: SubscribeEvent = serde_json::from_str(&data).unwrap();
+                            assert_eq!(parsed_data.path, Some("test/device/value".into()));
+                            assert_eq!(parsed_data.signal, Some("event".into()));
+                            assert_eq!(parsed_data.param, Some(RpcValue::from(42).to_cpon()));
+                        }
+                        _ => panic!("Unexpected event"),
+                    }
                 }
-                _ => panic!("Unexpected event"),
-            }
+            });
+            tasks.push(task);
         }
+        join_all(tasks).await;
     });
 }
