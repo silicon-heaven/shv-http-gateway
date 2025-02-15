@@ -3,6 +3,9 @@ name = "shv-http-gateway"
 version = "0.1.2"
 edition = "2021"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)'] }
+
 [dev-dependencies]
 shvbroker = { git = "https://github.com/silicon-heaven/shvbroker-rs", branch = "master" }
 sse-codec = "0.3.2"
