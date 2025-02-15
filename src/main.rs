@@ -1,3 +1,5 @@
+#![cfg_attr(coverage, feature(coverage_attribute))]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

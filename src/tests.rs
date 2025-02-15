@@ -1,3 +1,5 @@
+#![cfg_attr(coverage, coverage(off))]
+
 use std::future::Future;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -409,18 +411,16 @@ fn api_subscribe() {
                         .await
                         .expect("Unexpected end of stream")
                         .unwrap_or_else(|e| panic!("Unexpected error in event stream: {e}"));
-                    match event {
-                        sse_codec::Event::Message{ id, event, data, ..} => {
-                            info!("{data}");
-                            assert!(id.is_none());
-                            assert_eq!(event, "message");
-                            let parsed_data: SubscribeEvent = serde_json::from_str(&data).unwrap();
-                            assert_eq!(parsed_data.path, Some("test/device/value".into()));
-                            assert_eq!(parsed_data.signal, Some("event".into()));
-                            assert_eq!(parsed_data.param, Some(RpcValue::from(42).to_cpon()));
-                        }
-                        _ => panic!("Unexpected event"),
-                    }
+                    let sse_codec::Event::Message{ id, event, data} = event else {
+                        panic!("Unexpected event");
+                    };
+                    info!("{data}");
+                    assert!(id.is_none());
+                    assert_eq!(event, "message");
+                    let parsed_data: SubscribeEvent = serde_json::from_str(&data).unwrap();
+                    assert_eq!(parsed_data.path, Some("test/device/value".into()));
+                    assert_eq!(parsed_data.signal, Some("event".into()));
+                    assert_eq!(parsed_data.param, Some(RpcValue::from(42).to_cpon()));
                 }
             });
             tasks.push(task);
