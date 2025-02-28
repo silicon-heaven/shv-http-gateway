@@ -72,7 +72,6 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watchEffect } from 'vue';
-import axios from 'axios';
 import router from './router';
 import Tree, { type TreeSelectionKeys } from 'primevue/tree';
 import type { TreeNode } from 'primevue/treenode';
@@ -151,7 +150,7 @@ const onClickCallMethod = async () => {
   }
   else {
     isMethodCallError.value = false;
-    methodCallResult.value = res.result;
+    methodCallResult.value = res;
   }
 };
 
@@ -166,6 +165,12 @@ const callRpcMethod = async (path: string, method: string, param?: string) => {
     result: string
   }
 
+  interface RpcErrorResponse {
+    code: number,
+    detail: string,
+    shv_error: string,
+  }
+
   const body: Record<string, any> = {
     path,
     method,
@@ -175,27 +180,29 @@ const callRpcMethod = async (path: string, method: string, param?: string) => {
   }
 
   try {
-    const response = await axios.post<RpcResponse>("http://localhost:8000/api/rpc",
-      body,
-      {
-        headers: {
-          Authorization: `${session_id}`,
+    const response = await fetch("http://localhost:8000/api/rpc", {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: {
+          'Authorization': `${session_id}`,
           'Content-Type': 'application/json',
         },
       }
     );
-    return response.data;
-
-  } catch (error) {
-    console.error(error);
-    if (axios.isAxiosError(error)) {
-      if (error.status === 401) {
+    if (!response.ok) {
+      const error_body: RpcErrorResponse = await response.json();
+      console.error(`callRpcMethod ${path}:${method}, response: ${response.status}, detail: ${error_body.detail}`);
+      if (response.status === 401) {
         // Unauthorized - session ID expired or invalid
         await logout();
       }
-      return new Error(error.response?.data.detail);
+      return new Error(error_body.detail);
     }
-    return undefined;
+    const response_body: RpcResponse = await response.json();
+    return response_body.result;
+  } catch (error) {
+    console.error(error);
+    return new Error("Network error");
   }
 }
 
@@ -205,7 +212,7 @@ const callLs = async (path: string) => {
     return [];
   }
   try {
-    const res: string[] = JSON.parse(response.result);
+    const res: string[] = JSON.parse(response);
     return res ? res : [];
   } catch (error) {
     console.error(`Cannot parse ls result of ${path}`);
@@ -219,9 +226,9 @@ const callDir = async (path: string) => {
     console.log("Call `dir` error");
     return [];
   }
-  const parsedRes = DirArrayZod.safeParse(fromCpon(response.result));
+  const parsedRes = DirArrayZod.safeParse(fromCpon(response));
   if (!parsedRes.success) {
-    console.warn(fromCpon(response.result));
+    console.warn(fromCpon(response));
     console.log(parsedRes.error);
     return [];
   }
@@ -269,8 +276,9 @@ const logout = async () => {
   if (session_id) {
     localStorage.removeItem("session_id");
     try {
-      await axios.post("http://localhost:8000/api/logout", null,
+      await fetch("http://localhost:8000/api/logout",
         {
+          method: 'POST',
           headers: {
             Authorization: `${session_id}`,
           },
