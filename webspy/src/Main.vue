@@ -42,28 +42,23 @@
       </DataTable>
       <Card v-if="selectedMethod && selectedPath">
         <template #content>
-          <Tabs value="0">
-            <TabList>
-              <Tab value="0">Method call</Tab>
-              <!-- <Tab value="1">API request</Tab> -->
-            </TabList>
-            <TabPanels>
-              <TabPanel value="0">
-                <div class="flex flex-column row-gap-2">
-                  <Fieldset legend="Param" collapsed toggleable>
-                    <Textarea v-model="methodParam" rows="5" style="resize: vertical; width: 100%;" />
-                  </Fieldset>
-                  <Button @click="onClickCallMethod" icon="pi pi-check" label="Call" raised />
-                  <Fieldset legend="Result">
-                    <Textarea v-model="methodCallResult" rows="5" :class="{errtext: isMethodCallError}" style="resize: vertical; width: 100%" />
-                  </Fieldset>
-                </div>
-              </TabPanel>
-              <!-- <TabPanel value="1"> -->
-              <!--   <p class="m-0">API request</p> -->
-              <!-- </TabPanel> -->
-            </TabPanels>
-          </Tabs>
+          <div class="flex flex-column row-gap-2">
+            <Fieldset legend="Param" collapsed toggleable>
+              <Textarea v-model="methodParam" rows="5" style="resize: vertical; width: 100%;" />
+            </Fieldset>
+            <div class="flex gap-2">
+              <Button @click="onClickCallMethod" label="Call" raised />
+              <Button @click="onClickCurlRequest" label="cURL Request" raised />
+            </div>
+            <Dialog v-model:visible="curlRequestDialogVisible" modal header="cURL Request" :style="{ width: '50vw' }">
+              <Panel>
+                <div class="font-mono text-sm m-0" style="font-family: monospace;">{{curlRequest}}</div>
+              </Panel>
+            </Dialog>
+            <Fieldset legend="Result">
+              <Textarea v-model="methodCallResult" rows="5" :class="{errtext: isMethodCallError}" style="resize: vertical; width: 100%" />
+            </Fieldset>
+          </div>
         </template>
       </Card>
     </div>
@@ -75,10 +70,11 @@ import { computed, onMounted, ref, watchEffect } from 'vue';
 import router from './router';
 import Tree, { type TreeSelectionKeys } from 'primevue/tree';
 import type { TreeNode } from 'primevue/treenode';
-import { Button, Column, DataTable, Tab, TabList, TabPanels, TabPanel, Tabs, Card, Textarea, Fieldset, Toolbar} from 'primevue';
+import { Button, Column, DataTable, Dialog, Panel, Card, Textarea, Fieldset, Toolbar} from 'primevue';
 import { fromCpon } from 'libshv-js/cpon.ts';
 import * as z from 'libshv-js/zod.ts';
 import type { ShvMap } from 'libshv-js/rpcvalue.ts';
+import fetchToCurl from 'fetch-to-curl';
 
 const KEY_METHOD_NAME = 1;
 const KEY_PARAM = 3;
@@ -116,6 +112,9 @@ const selectedMethod = computed(() => selectedMethodRow.value?.name);
 const methodParam = ref<string | undefined>();
 const methodCallResult = ref('');
 const isMethodCallError = ref(false);
+const curlRequestDialogVisible = ref(false);
+const curlRequest = ref("");
+const callRpcUrl = "http://localhost:8000/api/rpc";
 
 const signalsToString = (signals: ShvMap | undefined) => {
   if (!signals) {
@@ -132,7 +131,20 @@ const signalsToString = (signals: ShvMap | undefined) => {
 
 watchEffect(() => {
   console.log(selectedMethod.value);
+  if (!selectedPath.value || !selectedMethod.value) {
+    return;
+  }
 });
+
+const onClickCurlRequest = () => {
+  if (!selectedPath.value || !selectedMethod.value) {
+    return;
+  }
+  const param = methodParam.value && methodParam.value.length > 0 ? methodParam.value : undefined;
+  const params = callRpcMethodParams(selectedPath.value, selectedMethod.value, "0000000000000", param);
+  curlRequest.value = fetchToCurl(callRpcUrl, params);
+  curlRequestDialogVisible.value = true;
+};
 
 const onClickCallMethod = async () => {
   if (!selectedPath.value || !selectedMethod.value) {
@@ -154,6 +166,24 @@ const onClickCallMethod = async () => {
   }
 };
 
+const callRpcMethodParams = (path: string, method: string, session_id: string, param?: string) => {
+  const body: Record<string, any> = {
+    path,
+    method,
+  }
+  if (param !== undefined) {
+    body.param = param;
+  }
+  return {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: {
+        'Authorization': `${session_id}`,
+        'Content-Type': 'application/json',
+      },
+    };
+};
+
 const callRpcMethod = async (path: string, method: string, param?: string) => {
   const session_id = localStorage.getItem("session_id");
   if (!session_id) {
@@ -171,24 +201,8 @@ const callRpcMethod = async (path: string, method: string, param?: string) => {
     shv_error: string,
   }
 
-  const body: Record<string, any> = {
-    path,
-    method,
-  }
-  if (param !== undefined) {
-    body.param = param;
-  }
-
   try {
-    const response = await fetch("http://localhost:8000/api/rpc", {
-      method: 'POST',
-      body: JSON.stringify(body),
-      headers: {
-          'Authorization': `${session_id}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    const response = await fetch(callRpcUrl, callRpcMethodParams(path, method, session_id, param));
     if (!response.ok) {
       const error_body: RpcErrorResponse = await response.json();
       console.error(`callRpcMethod ${path}:${method}, response: ${response.status}, detail: ${error_body.detail}`);
