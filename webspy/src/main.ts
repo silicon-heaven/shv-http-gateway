@@ -7,6 +7,7 @@ import './assets/main.css'
 import 'primeicons/primeicons.css'
 import 'primeflex/primeflex.css'
 import { definePreset } from '@primevue/themes'
+import { ToastService } from 'primevue'
 
 const presetAuraSlate = definePreset(Aura, {
   semantic: {
@@ -40,4 +41,5 @@ createApp(App)
     }
   )
   .use(router)
+  .use(ToastService)
   .mount('#app')

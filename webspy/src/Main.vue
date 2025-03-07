@@ -91,7 +91,11 @@
             </DataTable>
           </TabPanel>
           <TabPanel value="1">
-            <Button @click="notifications.length = 0" label="Clear" icon="pi pi-trash" size="small" />
+            <div v-if="notifications.length">
+              <Button @click="notifications.length = 0" label="Clear"
+              class="p-button-danger" icon="pi pi-trash" size="small" />
+              <Divider />
+            </div>
             <DataTable
               v-if="notifications.length"
               :value="notifications"
@@ -108,6 +112,7 @@
       </Tabs>
     </SplitterPanel>
   </Splitter>
+  <Toast position="bottom-left" group="bl" />
 </template>
 
 <script setup lang="ts">
@@ -119,8 +124,6 @@ import {
   Button,
   Column,
   DataTable,
-  Dialog,
-  Panel,
   Card,
   Textarea,
   Fieldset,
@@ -133,6 +136,9 @@ import {
   TabPanel,
   Toolbar,
   InputText,
+  useToast,
+  Toast,
+  Divider,
 } from 'primevue';
 import { fromCpon } from 'libshv-js/cpon.ts';
 import * as z from 'libshv-js/zod.ts';
@@ -176,6 +182,8 @@ const methodParam = ref<string | undefined>();
 const methodsOutput = ref('');
 const isMethodsOutputError = ref(false);
 const callRpcUrl = "http://localhost:8000/api/rpc";
+
+const toast = useToast();
 
 interface Subscription {
   ri: string,
@@ -221,7 +229,12 @@ watchEffect(() => {
 
 const addSubscription = async (ri: string) => {
   if (subscriptions.value.findIndex(item => item.ri === ri) !== -1) {
-    alert(`${ri} is already subscribed`);
+    toast.add({
+      severity: "warn",
+      summary: `${ri} is already subscribed`,
+      group: 'bl',
+      life: 5000,
+    });
     return;
   }
 
@@ -247,7 +260,12 @@ const addSubscription = async (ri: string) => {
         // Unauthorized - session ID expired or invalid
         await logout();
       }
-      alert(`Cannot subscribe '${ri}'\n${response.status} ${response.statusText}\n${error_body.detail}`);
+      toast.add({
+        severity: "error",
+        summary: `Cannot subscribe '${ri}'`,
+        detail: `${response.status} ${response.statusText}\n${error_body.detail}`,
+        group: 'bl',
+      });
       return;
     }
     if (!response.body) {
@@ -288,7 +306,12 @@ const addSubscription = async (ri: string) => {
     })();
   } catch (error) {
     console.error(error);
-    alert(`Cannot subscribe '${ri}'\n${error}`);
+    toast.add({
+      severity: "error",
+      summary: `Cannot subscribe '${ri}'`,
+      detail: `${error}`,
+      group: 'bl',
+    });
   }
 };
 
