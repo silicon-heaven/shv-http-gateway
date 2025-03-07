@@ -26,7 +26,6 @@
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import axios from "axios";
 import { useRouter } from "vue-router";
 import { Button, InputText, InputGroup, InputGroupAddon, Message} from "primevue";
 import Card from "primevue/card";
@@ -42,23 +41,36 @@ interface LoginResponse {
   session_id: string
 }
 
+interface ErrorResponse {
+  code: number,
+  detail: string,
+}
+
 const login = async () => {
   errorMessage.value = "";
   loading.value = true;
   try {
-    const response = await axios.post<LoginResponse>("http://localhost:8000/api/login", {
-      username: username.value,
-      password: password.value,
+    const response = await fetch("http://localhost:8000/api/login", {
+      method: 'POST',
+      body: JSON.stringify({
+        username: username.value,
+        password: password.value,
+      })
     });
-    const session_id = response.data.session_id;
+    if (!response.ok) {
+      const error_body: ErrorResponse = await response.json();
+      errorMessage.value = error_body.detail;
+      return;
+    }
+    const login_response: LoginResponse = await response.json();
+    const session_id = login_response.session_id;
     localStorage.setItem("session_id", session_id);
     router.push("/main");
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      errorMessage.value =
-        error.response?.data?.detail || "Could not log-in";
+    if (error instanceof Error) {
+      errorMessage.value = `Log-in failed: ${error.message}`;
     } else {
-      errorMessage.value = "Error in log-in request"
+      errorMessage.value = `Log-in failed: ${error}`;
     }
   } finally {
     loading.value = false;

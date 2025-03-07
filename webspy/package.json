@@ -1,6 +1,6 @@
 {
   "name": "webspy",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -14,9 +14,9 @@
   "dependencies": {
     "@primevue/forms": "^4.2.5",
     "@primevue/themes": "^4.2.5",
-    "axios": "^1.7.9",
+    "fetch-to-curl": "^0.6.0",
     "libshv-js": "^3.4.2",
-    "primeflex": "^3.3.1",
+    "primeflex": "^4.0.0",
     "primeicons": "^7.0.0",
     "primevue": "^4.2.5",
     "vue": "^3.5.13",
@@ -29,10 +29,10 @@
     "@vue/eslint-config-typescript": "^14.3.0",
     "@vue/tsconfig": "^0.7.0",
     "eslint": "^9.18.0",
-    "eslint-plugin-vue": "^9.32.0",
+    "eslint-plugin-vue": "^10.0.0",
     "jiti": "^2.4.2",
     "npm-run-all2": "^7.0.2",
-    "typescript": "~5.7.3",
+    "typescript": "^5.8.2",
     "vite": "^6.0.11",
     "vite-plugin-vue-devtools": "^7.7.0",
     "vue-tsc": "^2.2.0"
