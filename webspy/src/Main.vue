@@ -52,15 +52,11 @@
                   </Fieldset>
                   <div class="flex gap-2">
                     <Button @click="onClickCallMethod" label="Call" size="small" raised />
-                    <Button @click="showCurlRequestDialog" label="cURL Request" size="small" raised />
+                    <Button @click="showCurlRequest" label="cURL Request" size="small" raised />
                   </div>
-                  <Dialog v-model:visible="curlRequestDialogVisible" modal header="cURL Request" :style="{ width: '50vw' }">
-                    <Panel>
-                      <div class="font-mono text-sm m-0" style="font-family: monospace;">{{curlRequest}}</div>
-                    </Panel>
-                  </Dialog>
-                  <Fieldset legend="Result">
-                    <Textarea v-model="methodCallResult" rows="5" :class="{errtext: isMethodCallError}" style="resize: vertical; width: 100%" />
+                  <Fieldset legend="Output">
+                    <Textarea v-model="methodsOutput" rows="5" :class="{errtext: isMethodsOutputError}"
+                      style="resize: vertical; width: 100%; font-family: monospace;" />
                   </Fieldset>
                 </div>
               </template>
@@ -95,6 +91,7 @@
             </DataTable>
           </TabPanel>
           <TabPanel value="1">
+            <Button @click="notifications.length = 0" label="Clear" icon="pi pi-trash" size="small" />
             <DataTable
               v-if="notifications.length"
               :value="notifications"
@@ -176,10 +173,8 @@ const selectedPath = computed(() =>
 const selectedMethodRow = ref<DirArray[number]>();
 const selectedMethod = computed(() => selectedMethodRow.value?.name);
 const methodParam = ref<string | undefined>();
-const methodCallResult = ref('');
-const isMethodCallError = ref(false);
-const curlRequestDialogVisible = ref(false);
-const curlRequest = ref("");
+const methodsOutput = ref('');
+const isMethodsOutputError = ref(false);
 const callRpcUrl = "http://localhost:8000/api/rpc";
 
 interface Subscription {
@@ -256,7 +251,6 @@ const addSubscription = async (ri: string) => {
       return;
     }
     if (!response.body) {
-      // No response body
       return;
     }
     const reader = response.body.getReader();
@@ -308,14 +302,15 @@ const removeSubscription = async (row: Subscription) => {
   });
 };
 
-const showCurlRequestDialog = () => {
-  if (!selectedPath.value || !selectedMethod.value) {
+const showCurlRequest = () => {
+  const session_id = localStorage.getItem("session_id");
+  if (!session_id || !selectedPath.value || !selectedMethod.value) {
     return;
   }
   const param = methodParam.value && methodParam.value.length > 0 ? methodParam.value : undefined;
-  const params = callRpcMethodParams(selectedPath.value, selectedMethod.value, "0000000000000", param);
-  curlRequest.value = fetchToCurl(callRpcUrl, params);
-  curlRequestDialogVisible.value = true;
+  const params = callRpcMethodParams(selectedPath.value, selectedMethod.value, session_id, param);
+  isMethodsOutputError.value = false;
+  methodsOutput.value = fetchToCurl(callRpcUrl, params);
 };
 
 const onClickCallMethod = async () => {
@@ -329,12 +324,12 @@ const onClickCallMethod = async () => {
     return;
   }
   if (res instanceof Error) {
-    isMethodCallError.value = true;
-    methodCallResult.value = res.message;
+    isMethodsOutputError.value = true;
+    methodsOutput.value = res.message;
   }
   else {
-    isMethodCallError.value = false;
-    methodCallResult.value = res;
+    isMethodsOutputError.value = false;
+    methodsOutput.value = res;
   }
 };
 
@@ -440,13 +435,13 @@ const onNodeExpand = async (node: TreeNode) => {
 }
 
 const onNodeSelect = async (node: TreeNode) => {
-  methodCallResult.value = '';
+  methodsOutput.value = '';
   selectedMethodRow.value = undefined;
   methods.value = await callDir(node.key);
 }
 
 const onNodeUnselect = async (_node: TreeNode) => {
-  methodCallResult.value = '';
+  methodsOutput.value = '';
   selectedMethodRow.value = undefined;
   methods.value = [];
 }
