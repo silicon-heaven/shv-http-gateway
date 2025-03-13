@@ -21,7 +21,7 @@ use shvrpc::rpcmessage::RpcError;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 use url::Url;
 
-use crate::{build_rocket, ErrorResponseBody, LoginResponse, ProgramConfig, RpcResponse, SubscribeEvent};
+use crate::{build_rocket, ErrorResponseBody, LoginResponse, ProgramConfig, SubscribeEvent};
 
 const BROKER_ADDRESS: &str = "127.0.0.1:37567";
 const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
@@ -60,8 +60,8 @@ async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsRece
         shvclient::client::Client::<_,()>::new(DotAppNode::new("testing_client"))
             .mount("value", shvclient::fixed_node! (
                     value_node(request, _tx) {
-                        "echo" [IsGetter, Read, "", ""] (param: i32) => {
-                            Some(Ok(RpcValue::from(param)))
+                        "echo" [IsGetter, Read, "", ""] (param: RpcValue) => {
+                            Some(Ok(param))
                         }
                     })
             )
@@ -298,14 +298,15 @@ fn api_rpc_calls() {
             session_id: String,
         }
         impl RpcCallDispatcher {
-            async fn call(&self, path: impl AsRef<str>, method: impl AsRef<str>, param: Option<impl std::fmt::Display>) -> rocket::local::asynchronous::LocalResponse<'_> {
+            async fn call(&self, path: impl AsRef<str>, method: impl AsRef<str>, param: Option<impl Into<RpcValue>>) -> rocket::local::asynchronous::LocalResponse<'_> {
                 let path = path.as_ref();
                 let method = method.as_ref();
                 let body = if let Some(param) = param {
-                    format!(r#"{{"path": "{path}", "method": "{method}", "param": "{param}"}}"#)
+                    format!(r#"{{"path": "{path}", "method": "{method}", "param": {}}}"#, param.into().to_json())
                 } else {
                     format!(r#"{{"path": "{path}", "method": "{method}"}}"#)
                 };
+                info!("RpcCall body: {body}");
                 self.client
                     .post("/api/rpc")
                     .header(rocket::http::Header::new("Authorization", self.session_id.clone()))
@@ -343,21 +344,25 @@ fn api_rpc_calls() {
         // Regular calls
         let rpc_call_dispatcher = RpcCallDispatcher { client, session_id };
         {
-            let resp = rpc_call_dispatcher.call(".broker", "ls", None::<&str>).await;
+            let resp = rpc_call_dispatcher.call(".broker", "ls", None::<RpcValue>).await;
             assert_eq!(resp.status(), Status::Ok);
-            let result = resp.into_json::<RpcResponse>().await.unwrap().result;
-            let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
+            let result_rpcval = resp.into_string().await.map(|s| RpcValue::from_json(&s)).unwrap().unwrap();
             assert!(result_rpcval.is_list());
-            assert!(!result_rpcval.as_list().is_empty(), ".broker:ls should return non-empty list (got: {result})");
+            assert!(!result_rpcval.as_list().is_empty(), ".broker:ls should return non-empty list (got: {result_rpcval:?})");
         }
-        {
-            let arg = 42;
+
+        let values = [
+            RpcValue::from(42),
+            RpcValue::from("test"),
+            RpcValue::from(shvproto::make_imap!(1 => "foo", 2 => 42))
+        ];
+        for arg in &values {
             let resp = rpc_call_dispatcher.call("test/device/value", "echo", Some(arg)).await;
             assert_eq!(resp.status(), Status::Ok);
-            let result = resp.into_json::<RpcResponse>().await.unwrap().result;
-            let result_rpcval = shvproto::RpcValue::from_cpon(&result).unwrap();
-            assert!(result_rpcval.is_int());
-            assert_eq!(result_rpcval.as_int(), arg, "value:read should return {arg})");
+            let result_rpcval = resp.into_string().await.map(|s| RpcValue::from_json(&s)).unwrap().unwrap();
+            info!("value:echo sent:{arg} received:{result_rpcval} {}", result_rpcval.type_name());
+            assert_eq!(result_rpcval.type_name(), arg.type_name());
+            assert_eq!(&result_rpcval, arg, "value:read should return {arg})");
         }
     });
 }
@@ -417,10 +422,10 @@ fn api_subscribe() {
                     info!("{data}");
                     assert!(id.is_none());
                     assert_eq!(event, "message");
-                    let parsed_data: SubscribeEvent = serde_json::from_str(&data).unwrap();
+                    let parsed_data: SubscribeEvent = RpcValue::from_json(&data).unwrap().try_into().unwrap();
                     assert_eq!(parsed_data.path, Some("test/device/value".into()));
                     assert_eq!(parsed_data.signal, Some("event".into()));
-                    assert_eq!(parsed_data.param, Some(RpcValue::from(42).to_cpon()));
+                    assert_eq!(parsed_data.param, Some(RpcValue::from(42)));
                 }
             });
             tasks.push(task);
