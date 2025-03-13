@@ -147,7 +147,7 @@ fn program_config() -> ProgramConfig {
 async fn err_response() {
     let (error_status, error_body) = crate::err_response(Status::BadRequest, "Invalid input");
     assert_eq!(error_status, Status::BadRequest);
-    let body: ErrorResponseBody = serde_json::from_str(&error_body).unwrap();
+    let body: ErrorResponseBody = serde_json::from_str(&serde_json::to_string(&error_body.0).unwrap()).unwrap();
     assert_eq!(body.code, Status::BadRequest.code);
     assert_eq!(body.detail, "Invalid input");
 }
@@ -166,7 +166,7 @@ async fn err_rpc_response() {
             )
         );
         assert_eq!(error_status, Status::InternalServerError);
-        let body: ErrorResponseBody = serde_json::from_str(&error_body).unwrap();
+        let body: ErrorResponseBody = serde_json::from_str(&serde_json::to_string(&error_body.0).unwrap()).unwrap();
         assert_eq!(body.code, Status::InternalServerError.code);
         assert_eq!(body.shv_error, Some("RpcError(MethodNotFound)".into()));
     }
@@ -178,7 +178,7 @@ async fn err_rpc_response() {
                 CallRpcMethodErrorKind::ConnectionClosed)
         );
         assert_eq!(error_status, Status::InternalServerError);
-        let body: ErrorResponseBody = serde_json::from_str(&error_body).unwrap();
+        let body: ErrorResponseBody = serde_json::from_str(&serde_json::to_string(&error_body.0).unwrap()).unwrap();
         assert_eq!(body.code, Status::InternalServerError.code);
         assert_eq!(body.shv_error, Some("ConnectionClosed".into()));
     }

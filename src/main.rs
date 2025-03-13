@@ -51,10 +51,10 @@ async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient
     rx.await.ok()
 }
 
-type ErrorResponse = (Status, String);
+type ErrorResponse = (Status, Json<ErrorResponseBody>);
 
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Clone,Debug,Deserialize,Serialize)]
+#[cfg_attr(test, derive(PartialEq))]
 struct ErrorResponseBody {
     code: u16,
     detail: String,
@@ -65,11 +65,11 @@ struct ErrorResponseBody {
 fn err_response<T: AsRef<str>>(status: Status, detail: impl Into<Option<T>>) -> ErrorResponse {
     (
         status,
-        serde_json::to_string(&ErrorResponseBody {
+        Json(ErrorResponseBody {
             code: status.code,
             detail: detail.into().map_or_else(|| "Unspecified reason".to_string(), |v| v.as_ref().to_string()),
             shv_error: None,
-        }).expect("ErrorResponseBody serialization should not fail")
+        })
     )
 }
 
@@ -328,7 +328,7 @@ struct RpcRequest {
 fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
     (
         Status::InternalServerError,
-        serde_json::to_string(&ErrorResponseBody {
+        Json(ErrorResponseBody {
             code: Status::InternalServerError.code,
             shv_error: Some(match e.error() {
                 CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed".to_string(),
@@ -337,7 +337,7 @@ fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
                 CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch".to_string(),
             }),
             detail: e.to_string(),
-        }).expect("ErrorResponseBody serialization should not fail")
+        })
     )
 }
 
