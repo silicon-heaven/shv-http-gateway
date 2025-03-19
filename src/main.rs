@@ -13,9 +13,10 @@ use rocket::futures::channel::{self, mpsc::UnboundedSender};
 use rocket::futures::future::Either;
 use rocket::futures::StreamExt;
 use rocket::http::Status;
-use rocket::request::{FromRequest, Outcome};
+use rocket::request::FromRequest;
+use rocket::response::content::RawJson;
 use rocket::response::stream::{Event, EventStream};
-use rocket::serde::json::{self, Json};
+use rocket::serde::json::Json;
 use rocket::tokio::time::Duration;
 use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
@@ -23,6 +24,7 @@ use rocket_cors::{AllowedOrigins, CorsOptions};
 use serde::{Deserialize, Serialize};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
+use shvproto::RpcValue;
 use shvrpc::rpc::ShvRI;
 use shvrpc::RpcMessageMetaTags;
 use simple_logger::SimpleLogger;
@@ -49,10 +51,10 @@ async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient
     rx.await.ok()
 }
 
-type ErrorResponse = (Status, String);
+type ErrorResponse = (Status, Json<ErrorResponseBody>);
 
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[derive(Clone,Debug,Deserialize,Serialize)]
+#[cfg_attr(test, derive(PartialEq))]
 struct ErrorResponseBody {
     code: u16,
     detail: String,
@@ -63,11 +65,11 @@ struct ErrorResponseBody {
 fn err_response<T: AsRef<str>>(status: Status, detail: impl Into<Option<T>>) -> ErrorResponse {
     (
         status,
-        serde_json::to_string(&ErrorResponseBody {
+        Json(ErrorResponseBody {
             code: status.code,
             detail: detail.into().map_or_else(|| "Unspecified reason".to_string(), |v| v.as_ref().to_string()),
             shv_error: None,
-        }).expect("ErrorResponseBody serialization should not fail")
+        })
     )
 }
 
@@ -76,20 +78,19 @@ struct SubscribeRequest<'t> {
     shv_ri: &'t str,
 }
 
-
-#[derive(Serialize)]
-#[cfg_attr(test, derive(Debug, Deserialize, PartialEq))]
+#[derive(shvproto::TryFromRpcValue)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct SubscribeEvent {
     path: Option<String>,
     signal: Option<String>,
-    param: Option<String>,
+    param: Option<RpcValue>,
 }
 
 
 #[post("/subscribe", data = "<request>")]
 async fn api_subscribe(
     session: Session,
-    request: Result<Json<SubscribeRequest<'_>>, json::Error<'_>>,
+    request: Result<Json<SubscribeRequest<'_>>, rocket::serde::json::Error<'_>>,
 ) -> Result<EventStream![], ErrorResponse>
 {
     let Session(_session_id, SessionData { command_channel, session_channel, .. }) = session;
@@ -126,11 +127,14 @@ async fn api_subscribe(
                             warn!("Received invalid RPC frame in notification: {e}\nframe: {frame}");
                             yield Event::data(e.to_string()).event("error");
                         }
-                        Ok(msg) => yield Event::json(&SubscribeEvent{
-                            path: msg.shv_path().map(String::from),
-                            signal: msg.method().map(String::from),
-                            param: msg.param().map(shvproto::RpcValue::to_cpon),
-                        }),
+                        Ok(msg) => yield Event::data(
+                            RpcValue::from(SubscribeEvent{
+                                path: msg.shv_path().map(String::from),
+                                signal: msg.method().map(String::from),
+                                param: msg.param().cloned(),
+                            })
+                            .to_json()
+                        ),
                     }
 
                 }
@@ -148,7 +152,7 @@ struct LoginResponse {
 
 #[post("/login", data = "<params>")]
 async fn api_login(
-    params: Result<Json<LoginParams<'_>>, json::Error<'_>>,
+    params: Result<Json<LoginParams<'_>>, rocket::serde::json::Error<'_>>,
     program_config: &State<ProgramConfig>,
     sessions: &State<Sessions>,
     random: &State<Random>,
@@ -314,23 +318,17 @@ async fn api_logout(session: Session) {
     command_channel.terminate_client();
 }
 
-#[derive(Deserialize)]
-struct RpcRequest<'t> {
-    path: &'t str,
-    method: &'t str,
-    param: Option<&'t str>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[cfg_attr(test, derive(Debug, PartialEq))]
-struct RpcResponse {
-    result: String,
+#[derive(shvproto::TryFromRpcValue)]
+struct RpcRequest {
+    path: String,
+    method: String,
+    param: Option<RpcValue>,
 }
 
 fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
     (
         Status::InternalServerError,
-        serde_json::to_string(&ErrorResponseBody {
+        Json(ErrorResponseBody {
             code: Status::InternalServerError.code,
             shv_error: Some(match e.error() {
                 CallRpcMethodErrorKind::ConnectionClosed => "ConnectionClosed".to_string(),
@@ -339,31 +337,69 @@ fn err_response_rpc_call(e: CallRpcMethodError) -> ErrorResponse {
                 CallRpcMethodErrorKind::ResultTypeMismatch(_) => "ResultTypeMismatch".to_string(),
             }),
             detail: e.to_string(),
-        }).expect("ErrorResponseBody serialization should not fail")
+        })
     )
 }
 
+macro_rules !return_err {
+    ($req:ident, $status:expr, $detail:expr) => {
+        {
+            let e = err_response($status, $detail);
+            $req.local_cache(|| e.clone());
+            return Outcome::Error(($status, e));
+        }
+    };
+}
+
+struct RpcValueJson<T>(T);
+
+#[rocket::async_trait]
+impl<'r, T> rocket::data::FromData<'r> for RpcValueJson<T>
+where T: TryFrom<RpcValue>,
+      T::Error: std::fmt::Display,
+{
+    type Error = ErrorResponse;
+
+    async fn from_data(req: &'r Request<'_>, data: rocket::Data<'r>) -> rocket::data::Outcome<'r, Self> {
+        use rocket::data::Outcome;
+        if req.content_type() != Some(&rocket::http::ContentType::JSON) {
+            return_err!(req, Status::UnsupportedMediaType, "Expected Content-Type: application/json");
+        }
+
+        let limit = req.limits().get("json").unwrap_or(rocket::data::Limits::JSON);
+
+        let string = match data.open(limit).into_string().await {
+            Ok(string) if string.is_complete() => string.into_inner(),
+            Ok(_) => return_err!(req, Status::PayloadTooLarge, "Payload too large"),
+            Err(e) => return_err!(req, Status::InternalServerError, format!("{e}")),
+        };
+
+        let value = match RpcValue::from_json(&string) {
+            Ok(v) => v,
+            Err(err) => return_err!(req, Status::UnprocessableEntity, format!("Cannot parse JSON to RpcValue: {err}")),
+        };
+
+        let res: T = match value.try_into() {
+            Ok(v) => v,
+            Err(err) => return_err!(req, Status::UnprocessableEntity, format!("Cannot convert RpcValue to the target type: {err}")),
+        };
+
+        Outcome::Success(RpcValueJson(res))
+    }
+}
+
 #[post("/rpc", data = "<request>")]
-async fn api_rpc(session: Session, request: Result<Json<RpcRequest<'_>>, json::Error<'_>>) -> Result<Json<RpcResponse>, ErrorResponse> {
+async fn api_rpc(session: Session, request: RpcValueJson<RpcRequest>) -> Result<RawJson<String>, ErrorResponse> {
     let Session(_, SessionData { command_channel, session_channel, .. }) = session;
     session_channel
         .unbounded_send(SessionEvent::Activity)
         .unwrap_or_else(|e| error!("Cannot send SessionEvent::Activity: {e}"));
-    let request = request
-        .map_err(|e| err_response(Status::UnprocessableEntity, e.to_string()))?;
-    let param = request.param
-        .map_or_else(|| Ok(None), |s|
-            shvproto::RpcValue::from_cpon(s)
-            .map(Some)
-            .map_err(|e| err_response(Status::UnprocessableEntity, format!("Invalid request param: {e}")))
-        )?;
+    let RpcValueJson(request) = request;
     let result: shvproto::RpcValue = command_channel
-        .call_rpc_method(request.path, request.method, param)
+        .call_rpc_method(&request.path, &request.method, request.param)
         .await
         .map_err(err_response_rpc_call)?;
-    Ok(Json(RpcResponse {
-        result: result.to_cpon(),
-    }))
+    Ok(RawJson(result.to_json()))
 }
 
 struct Session(String, SessionData);
@@ -372,26 +408,19 @@ struct Session(String, SessionData);
 impl<'r> FromRequest<'r> for Session {
     type Error = ErrorResponse;
 
-    async fn from_request(request: &'r Request<'_>) -> Outcome<Self, Self::Error> {
-        macro_rules! return_err {
-            ($status:expr, $detail:expr) => {
-                {
-                    let e = err_response($status, $detail);
-                    request.local_cache(|| e.clone());
-                    return Outcome::Error(($status, e));
-                }
-            };
-        }
-        let value = request
+
+    async fn from_request(req: &'r Request<'_>) -> rocket::request::Outcome<Self, Self::Error> {
+        use rocket::request::Outcome;
+        let value = req
             .headers()
             .get_one("Authorization");
         let Some(session_id) = value else {
-            return_err!(Status::BadRequest, "Missing Authorization header");
+            return_err!(req, Status::BadRequest, "Missing Authorization header");
         };
 
-        let Sessions(sessions) = request.rocket().state().expect("Sessions are present");
+        let Sessions(sessions) = req.rocket().state().expect("Sessions are present");
         let Some(session_data) = sessions.read().await.get(session_id).cloned() else {
-            return_err!(Status::Unauthorized, "Invalid session token");
+            return_err!(req, Status::Unauthorized, "Invalid session token");
         };
 
         Outcome::Success(Session(session_id.into(), session_data))

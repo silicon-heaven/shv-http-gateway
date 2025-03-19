@@ -140,7 +140,7 @@ import {
   Toast,
   Divider,
 } from 'primevue';
-import { fromCpon } from 'libshv-js/cpon.ts';
+import { fromJson } from 'libshv-js/json.ts';
 import * as z from 'libshv-js/zod.ts';
 import type { ShvMap } from 'libshv-js/rpcvalue.ts';
 import fetchToCurl from 'fetch-to-curl';
@@ -331,9 +331,14 @@ const showCurlRequest = () => {
     return;
   }
   const param = methodParam.value && methodParam.value.length > 0 ? methodParam.value : undefined;
-  const params = callRpcMethodParams(selectedPath.value, selectedMethod.value, session_id, param);
-  isMethodsOutputError.value = false;
-  methodsOutput.value = fetchToCurl(callRpcUrl, params);
+  try {
+    const params = callRpcMethodParams(selectedPath.value, selectedMethod.value, session_id, param);
+    isMethodsOutputError.value = false;
+    methodsOutput.value = fetchToCurl(callRpcUrl, params);
+  } catch (error) {
+    isMethodsOutputError.value = true;
+    methodsOutput.value = `Invalid param: ${error}`;
+  }
 };
 
 const onClickCallMethod = async () => {
@@ -362,7 +367,7 @@ const callRpcMethodParams = (path: string, method: string, session_id: string, p
     method,
   }
   if (param !== undefined) {
-    body.param = param;
+    body.param = JSON.parse(param);
   }
   return {
       method: 'POST',
@@ -381,10 +386,6 @@ const callRpcMethod = async (path: string, method: string, param?: string) => {
     return;
   }
 
-  interface RpcResponse {
-    result: string
-  }
-
   try {
     const response = await fetch(callRpcUrl, callRpcMethodParams(path, method, session_id, param));
     if (!response.ok) {
@@ -396,11 +397,10 @@ const callRpcMethod = async (path: string, method: string, param?: string) => {
       }
       return new Error(error_body.detail);
     }
-    const response_body: RpcResponse = await response.json();
-    return response_body.result;
+    return await response.text();
   } catch (error) {
     console.error(error);
-    return new Error("Network error");
+    return new Error(`callRpcMethod error: ${error}`);
   }
 }
 
@@ -424,9 +424,9 @@ const callDir = async (path: string) => {
     console.log("Call `dir` error");
     return [];
   }
-  const parsedRes = DirArrayZod.safeParse(fromCpon(response));
+  const parsedRes = DirArrayZod.safeParse(fromJson(response));
   if (!parsedRes.success) {
-    console.warn(fromCpon(response));
+    console.warn(fromJson(response));
     console.log(parsedRes.error);
     return [];
   }
