@@ -155,13 +155,13 @@ This endpoint is used to call RPC methods.
 {
     "path": "shv/foo/bar",
     "method": "getFile",
-    "param": "{\"maxSize\":1234}"
+    "param": {"maxSize":1234}
 }
 ```
 
 - **path** (string): SHV path
 - **method** (string): SHV method to call on the path
-- **param** (string, optional): Parameter to the call in CPON format
+- **param** (JSON value, optional): Parameter to the call as a JSON value
 
 ### Responses
 
@@ -171,10 +171,10 @@ This endpoint is used to call RPC methods.
 - **Response Body** (JSON):
   ```json
   {
-      "result": "42"
+      "result": 42
   }
   ```
-  - **result** (string): Result as a CPON string
+  - **result** (string): Result as a JSON value
 
 #### Error
 - **Error Response Format:**
@@ -224,14 +224,14 @@ curl -X POST https://example.com/api/rpc \
   -d '{
     "path": "foo/bar/xyz",
     "method": "getFile",
-    "param": "{\"maxSize:1234\"}"
+    "param": {"maxSize":1234}
   }'
 ```
 
 ### Example Success Response
 ```json
 {
-  "result": "42"
+  "result": 42
 }
 ```
 
@@ -295,11 +295,11 @@ Subscribe to a notification stream for specific signals. The server sends events
 - **Event Stream Data Format:**
   - **Notification Event:**
     ```
-    data: {"path": "path/of/the/notification", "signal": "signal_name", "param": "..."}
+    data: {"path": "path/of/the/notification", "signal": "signal_name", "param": {"data": 42}}
     ```
     - `path`: Path of the notification.
     - `signal`: Signal name associated with the notification.
-    - `param`: CPON string containing additional data for the notification.
+    - `param`: a JSON value containing additional data for the notification.
 
 - If an error frame is received, the server sends an error event in the stream:
   ```
@@ -345,9 +345,9 @@ curl -X POST https://example.com/api/subscribe \
 ```
 ...
 
-data: {"path": "foo/bar/notification", "signal": "signal_name", "param": "..."}
+data: {"path": "foo/bar/notification", "signal": "signal_name", "param": {"abc": 123}}
 
-data: {"path": "foo/bar/another_notification", "signal": "another_signal", "param": "..."}
+data: {"path": "foo/bar/another_notification", "signal": "another_signal", "param": true}
 
 ...
 ```
