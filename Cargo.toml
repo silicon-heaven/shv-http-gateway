@@ -1,6 +1,6 @@
 [package]
 name = "shv-http-gateway"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 
 [lints.rust]
@@ -14,9 +14,9 @@ tokio-util = { version = "0.7.13", features = ["compat"] }
 [dependencies]
 shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.2" }
 shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.2" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.4", features = ["tokio"] }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.6", features = ["tokio"] }
 rocket = { version = "0.5.1", features = ["tls", "json"] }
-tokio = { version = "1.43.0", features = ["net", "time"] }
+tokio = { version = "1.44.2", features = ["net", "time"] }
 log = "0.4.25"
 url = { version = "2.5.4", features = ["serde"] }
 clap = { version = "4.5.26", features = ["derive"] }
@@ -34,3 +34,9 @@ webspy = []
 
 # [patch."https://github.com/silicon-heaven/libshvclient-rs"]
 # shvclient = { path = "../libshvclient-rs" }
+#
+# [patch."https://github.com/silicon-heaven/libshvproto-rs"]
+# shvproto = { path = "../libshvproto-rs" }
+#
+# [patch."https://github.com/silicon-heaven/libshvrpc-rs"]
+# shvrpc = { path = "../libshvrpc-rs" }
