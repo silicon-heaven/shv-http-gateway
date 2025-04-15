@@ -23,7 +23,7 @@ use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
 use serde::{Deserialize, Serialize};
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
-use shvclient::{ClientCommandSender, ClientEvent, ConnectionFailedKind};
+use shvclient::{ClientEvent, ConnectionFailedKind};
 use shvproto::RpcValue;
 use shvrpc::rpc::ShvRI;
 use shvrpc::RpcMessageMetaTags;
@@ -33,7 +33,9 @@ use url::Url;
 
 #[cfg(test)] mod tests;
 
-async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(shvclient::ClientCommandSender, shvclient::ClientEventsReceiver)> {
+type ClientCommandSender = shvclient::ClientCommandSender<()>;
+
+async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(ClientCommandSender, shvclient::ClientEventsReceiver)> {
     let (tx, rx) = rocket::futures::channel::oneshot::channel();
     tokio::spawn(async move {
         shvclient::client::Client::new_plain()
