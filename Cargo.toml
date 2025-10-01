@@ -1,6 +1,6 @@
 [package]
 name = "shv-http-gateway"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 
 [lints.rust]
@@ -12,9 +12,9 @@ sse-codec = "0.3.2"
 tokio-util = { version = "0.7.13", features = ["compat"] }
 
 [dependencies]
-shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.2" }
-shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.2" }
-shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.6", features = ["tokio"] }
+shvproto = { git = "https://github.com/silicon-heaven/libshvproto-rs", branch = "master", version = "3.5" }
+shvrpc = { git = "https://github.com/silicon-heaven/libshvrpc-rs", branch = "master", version = "3.9" }
+shvclient = { git = "https://github.com/silicon-heaven/libshvclient-rs", branch = "main", version = "0.12", features = ["tokio"] }
 rocket = { version = "0.5.1", features = ["tls", "json"] }
 tokio = { version = "1.44.2", features = ["net", "time"] }
 log = "0.4.25"

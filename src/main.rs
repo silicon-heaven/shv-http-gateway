@@ -22,7 +22,7 @@ use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
 use serde::{Deserialize, Serialize};
-use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
+use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind, RpcCall};
 use shvclient::{ClientEvent, ConnectionFailedKind};
 use shvproto::RpcValue;
 use shvrpc::rpc::ShvRI;
@@ -80,7 +80,7 @@ struct SubscribeRequest<'t> {
     shv_ri: &'t str,
 }
 
-#[derive(shvproto::TryFromRpcValue)]
+#[derive(shvproto::FromRpcValue, shvproto::ToRpcValue)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 struct SubscribeEvent {
     path: Option<String>,
@@ -320,7 +320,7 @@ async fn api_logout(session: Session) {
     command_channel.terminate_client();
 }
 
-#[derive(shvproto::TryFromRpcValue)]
+#[derive(shvproto::FromRpcValue)]
 struct RpcRequest {
     path: String,
     method: String,
@@ -397,8 +397,9 @@ async fn api_rpc(session: Session, request: RpcValueJson<RpcRequest>) -> Result<
         .unbounded_send(SessionEvent::Activity)
         .unwrap_or_else(|e| error!("Cannot send SessionEvent::Activity: {e}"));
     let RpcValueJson(request) = request;
-    let result: shvproto::RpcValue = command_channel
-        .call_rpc_method(&request.path, &request.method, request.param)
+    let result: shvproto::RpcValue = RpcCall::new(&request.path, &request.method)
+        .param(request.param)
+        .exec(&command_channel)
         .await
         .map_err(err_response_rpc_call)?;
     Ok(RawJson(result.to_json()))

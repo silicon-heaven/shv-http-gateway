@@ -12,6 +12,8 @@ use rocket::futures::StreamExt;
 use rocket::http::ContentType;
 use rocket::local::asynchronous::Client as RocketClient;
 use rocket::http::Status;
+use shvbroker::brokerimpl::{run_broker, BrokerImpl};
+use shvbroker::config::Listen;
 use shvclient::appnodes::DotAppNode;
 use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
@@ -28,11 +30,14 @@ const BROKER_URL: &str = formatcp!("tcp://{BROKER_ADDRESS}");
 const BROKER_URL_WITH_CREDENTIALS: &str = formatcp!("tcp://admin:admin@{BROKER_ADDRESS}");
 
 async fn start_broker() {
-    let mut broker_config = shvbroker::config::BrokerConfig::default();
-    broker_config.listen.tcp = Some(BROKER_ADDRESS.into());
+    let broker_config = shvbroker::config::BrokerConfig {
+        listen: vec![Listen { url: Url::parse(BROKER_URL).unwrap() }],
+        ..Default::default()
+    };
     let access_config = broker_config.access.clone();
+    let broker_config = Arc::new(broker_config);
     tokio::spawn(async {
-        shvbroker::brokerimpl::accept_loop(broker_config, access_config, None)
+        run_broker(BrokerImpl::new(broker_config, access_config, None))
             .await
             .expect("broker accept_loop failed")
     });
@@ -47,7 +52,7 @@ async fn start_broker() {
     panic!("Could not start the broker");
 }
 
-async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsReceiver)> {
+async fn start_testing_client() -> Option<(ClientCommandSender<()>, ClientEventsReceiver)> {
     let (tx, rx) = rocket::futures::channel::oneshot::channel();
     tokio::spawn(async {
         let client_config = ClientConfig {
@@ -57,9 +62,10 @@ async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsRece
             heartbeat_interval: Duration::from_secs(60),
             reconnect_interval: None,
         };
-        shvclient::client::Client::<_,()>::new(DotAppNode::new("testing_client"))
+        shvclient::client::Client::<_,()>::new()
+            .app(DotAppNode::new("testing_client"))
             .mount("value", shvclient::fixed_node! (
-                    value_node(request, _tx) {
+                    value_node<()>(request, _tx) {
                         "echo" [IsGetter, Read, "", ""] (param: RpcValue) => {
                             Some(Ok(param))
                         }
