@@ -43,3 +43,10 @@ jobs:
         with:
           project_name: shv-http-gateway
           cargo_test_arguments: ""
+
+  check-version-bump:
+    name: Check version bump
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check version bump
+        uses: silicon-heaven/rust-check-version-bump@v1.0.1
