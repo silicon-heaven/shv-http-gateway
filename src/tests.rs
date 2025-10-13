@@ -149,8 +149,8 @@ fn program_config() -> ProgramConfig {
     }
 }
 
-#[tokio::test]
-async fn err_response() {
+#[test]
+fn err_response() {
     let (error_status, error_body) = crate::err_response(Status::BadRequest, "Invalid input");
     assert_eq!(error_status, Status::BadRequest);
     let body: ErrorResponseBody = serde_json::from_str(&serde_json::to_string(&error_body.0).unwrap()).unwrap();
@@ -158,8 +158,8 @@ async fn err_response() {
     assert_eq!(body.detail, "Invalid input");
 }
 
-#[tokio::test]
-async fn err_rpc_response() {
+#[test]
+fn err_rpc_response() {
     {
         let (error_status, error_body) = crate::err_response_rpc_call(
             CallRpcMethodError::new(
