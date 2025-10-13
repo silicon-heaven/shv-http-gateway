@@ -882,20 +882,6 @@ checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "duration-str"
-version = "0.12.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64ad6b66883f70e2f38f1ee99e3797b9d7e7b7fb051ed2e23e027c81753056c8"
-dependencies = [
- "chrono",
- "rust_decimal",
- "serde",
- "thiserror 2.0.17",
- "time",
- "winnow 0.6.26",
-]
-
-[[package]]
-name = "duration-str"
 version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9add086174f60bcbcfde7175e71dcfd99da24dfd12f611d0faf74f4f26e15a06"
@@ -905,7 +891,7 @@ dependencies = [
  "serde",
  "thiserror 2.0.17",
  "time",
- "winnow 0.7.13",
+ "winnow",
 ]
 
 [[package]]
@@ -1227,9 +1213,9 @@ dependencies = [
 
 [[package]]
 name = "generic-array"
-version = "0.14.8"
+version = "0.14.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1dc8f7d2ded5f9209535e4b3fd4d39c002f30902ff5ce9f64e2c33d549576500"
+checksum = "4bb6743198531e02858aeaea5398fcc883e71851fcbcb5a2f773e2fb6cb1edf2"
 dependencies = [
  "typenum",
  "version_check",
@@ -2871,12 +2857,12 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
 name = "shv-http-gateway"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64 0.22.1",
  "clap",
  "const_format",
- "duration-str 0.12.0",
+ "duration-str",
  "log",
  "rand_chacha 0.9.0",
  "rocket",
@@ -2901,7 +2887,7 @@ source = "git+https://github.com/silicon-heaven/shvbroker-rs?branch=master#b47f4
 dependencies = [
  "async-tungstenite",
  "clap",
- "duration-str 0.17.0",
+ "duration-str",
  "futures",
  "futures-rustls",
  "log",
@@ -2928,7 +2914,7 @@ version = "0.13.0"
 source = "git+https://github.com/silicon-heaven/libshvclient-rs?branch=main#f770bd5ead73b4e4b1a3810208ec65c15e0255a1"
 dependencies = [
  "async-broadcast",
- "duration-str 0.17.0",
+ "duration-str",
  "futures",
  "futures-rustls",
  "futures-time",
@@ -2963,7 +2949,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "crc",
- "duration-str 0.17.0",
+ "duration-str",
  "futures",
  "futures-time",
  "glob",
@@ -3405,7 +3391,7 @@ dependencies = [
  "serde_spanned",
  "toml_datetime",
  "toml_write",
- "winnow 0.7.13",
+ "winnow",
 ]
 
 [[package]]
@@ -4144,15 +4130,6 @@ name = "windows_x86_64_msvc"
 version = "0.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
-
-[[package]]
-name = "winnow"
-version = "0.6.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e90edd2ac1aa278a5c4599b1d89cf03074b610800f866d4026dc199d7929a28"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "winnow"
