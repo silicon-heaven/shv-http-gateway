@@ -6,8 +6,9 @@ use std::sync::Arc;
 use base64::prelude::*;
 use clap::Parser;
 use log::{debug, error, info, warn, LevelFilter};
-use rand_chacha::rand_core::{RngCore, SeedableRng};
-use rand_chacha::ChaChaRng;
+use rand::rand_core::Rng;
+use rand::rngs::ChaCha20Rng;
+use rand::SeedableRng;
 #[cfg(feature = "webspy")] use rocket::fs::{FileServer,relative};
 use rocket::futures::channel::{self, mpsc::UnboundedSender};
 use rocket::futures::future::Either;
@@ -22,7 +23,7 @@ use rocket::{catch, catchers, launch, post, routes, Build, Request, Rocket};
 use rocket::State;
 use rocket_cors::{AllowedOrigins, CorsOptions};
 use serde::{Deserialize, Serialize};
-use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind, RpcCall};
+use shvclient::clientapi::{CallRpcMethodError, CallRpcMethodErrorKind, RpcCall};
 use shvclient::{ClientEvent, ConnectionFailedKind};
 use shvproto::RpcValue;
 use shvrpc::rpc::ShvRI;
@@ -33,7 +34,14 @@ use url::Url;
 
 #[cfg(test)] mod tests;
 
-type ClientCommandSender = shvclient::ClientCommandSender<()>;
+// This function was deleted from rand_chacha, this is a backport.
+fn from_os_rng() -> ChaCha20Rng {
+    let mut seed = <rand::rngs::ChaCha20Rng as rand::SeedableRng>::Seed::default();
+    getrandom::fill(seed.as_mut()).expect("from_os_rng: getrandom::fill failed");
+    ChaCha20Rng::from_seed(seed)
+}
+
+type ClientCommandSender = shvclient::ClientCommandSender;
 
 async fn start_client(config: shvrpc::client::ClientConfig) -> Option<(ClientCommandSender, shvclient::ClientEventsReceiver)> {
     let (tx, rx) = rocket::futures::channel::oneshot::channel();
@@ -435,7 +443,7 @@ fn catch_default(status: Status, req: &Request) -> ErrorResponse {
     req.local_cache(|| err_response::<&str>(status, status.reason())).clone()
 }
 
-struct Random(pub(crate) Arc<Mutex<ChaChaRng>>);
+struct Random(pub(crate) Arc<Mutex<ChaCha20Rng>>);
 
 #[derive(Debug, clap::Parser)]
 struct ProgramConfig {
@@ -517,7 +525,7 @@ pub(crate) fn build_rocket(program_config: ProgramConfig) -> Rocket<Build> {
         .register("/", catchers![catch_default])
         .manage(program_config)
         .manage(Sessions::default())
-        .manage(Random(Arc::new(Mutex::new(ChaChaRng::from_os_rng()))));
+        .manage(Random(Arc::new(Mutex::new(from_os_rng()))));
 
     #[cfg(feature = "webspy")]
     let rocket = rocket.mount("/webspy", FileServer::from(relative!("webspy/dist")));

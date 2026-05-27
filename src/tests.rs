@@ -15,7 +15,7 @@ use rocket::http::Status;
 use shvbroker::brokerimpl::{run_broker, BrokerImpl};
 use shvbroker::config::Listen;
 use shvclient::appnodes::DotAppNode;
-use shvclient::client::{CallRpcMethodError, CallRpcMethodErrorKind};
+use shvclient::clientapi::{CallRpcMethodError, CallRpcMethodErrorKind};
 use shvclient::{ClientCommandSender, ClientEventsReceiver};
 use shvproto::RpcValue;
 use shvrpc::client::ClientConfig;
@@ -37,7 +37,16 @@ async fn start_broker() {
     let access_config = broker_config.access.clone();
     let broker_config = Arc::new(broker_config);
     tokio::spawn(async {
-        run_broker(BrokerImpl::new(broker_config, access_config, None))
+        let (broker_cmd_tx, broker_cmd_rx) = rocket::futures::channel::mpsc::unbounded::<shvbroker::brokerimpl::BrokerCommand>();
+        let broker_impl = BrokerImpl::new(
+            broker_config,
+            access_config,
+            shvbroker::brokerimpl::LastLogin::default(),
+            shvbroker::config::Policies::default(),
+            broker_cmd_tx,
+            None,
+        );
+        run_broker(broker_impl, broker_cmd_rx)
             .await
             .expect("broker accept_loop failed")
     });
@@ -52,7 +61,7 @@ async fn start_broker() {
     panic!("Could not start the broker");
 }
 
-async fn start_testing_client() -> Option<(ClientCommandSender<()>, ClientEventsReceiver)> {
+async fn start_testing_client() -> Option<(ClientCommandSender, ClientEventsReceiver)> {
     let (tx, rx) = rocket::futures::channel::oneshot::channel();
     tokio::spawn(async {
         let client_config = ClientConfig {
@@ -62,15 +71,16 @@ async fn start_testing_client() -> Option<(ClientCommandSender<()>, ClientEvents
             heartbeat_interval: Duration::from_secs(60),
             reconnect_interval: None,
         };
-        shvclient::client::Client::<_,()>::new()
+        let value_node = shvclient::static_node! {
+            ValueNode(request, _tx) {
+                "echo" [IsGetter, Read, "", ""] (param: RpcValue) => {
+                    Some(Ok(param))
+                }
+            }
+        };
+        shvclient::Client::new()
             .app(DotAppNode::new("testing_client"))
-            .mount("value", shvclient::fixed_node! (
-                    value_node<()>(request, _tx) {
-                        "echo" [IsGetter, Read, "", ""] (param: RpcValue) => {
-                            Some(Ok(param))
-                        }
-                    })
-            )
+            .mount_static("value", value_node)
             .run_with_init(&client_config, |commands_tx, events_rx| {
                 {
                     let commands_tx = commands_tx.clone();
@@ -83,7 +93,7 @@ async fn start_testing_client() -> Option<(ClientCommandSender<()>, ClientEvents
                         let mut interval = tokio::time::interval(Duration::from_millis(100));
                         loop {
                             interval.tick().await;
-                            let sig = shvrpc::RpcMessage::new_signal("value", "event", Some(42.into()));
+                            let sig = shvrpc::RpcMessage::new_signal("value", "event").with_param(42);
                             commands_tx.send_message(sig).unwrap_or_else(|_| error!("Cannot send signal"));
                         }
                     });
