@@ -143,7 +143,10 @@ import {
 import { fromJson } from 'libshv-js/json.ts';
 import * as z from 'libshv-js/zod.ts';
 import type { ShvMap } from 'libshv-js/rpcvalue.ts';
-import fetchToCurl from 'fetch-to-curl';
+import rawFetchToCurl from 'fetch-to-curl';
+
+// Workaround for https://rolldown.rs/in-depth/bundling-cjs#ambiguous-default-import-from-cjs-modules
+const fetchToCurl = typeof rawFetchToCurl === 'object' ? (rawFetchToCurl as any).default : rawFetchToCurl;
 
 const KEY_METHOD_NAME = 1;
 const KEY_PARAM = 3;
