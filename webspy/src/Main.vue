@@ -134,7 +134,7 @@
         v-model="subscriptionSignal"
         size="small"
         autofocus />
-      <small>{{ pendingSubscriptionPath }}/**:*:{{ subscriptionSignal || 'signal' }}</small>
+      <small>{{ pendingSubscriptionPath }}/**:*:{{ subscriptionSignal }}</small>
     </div>
     <template #footer>
       <Button
@@ -143,6 +143,11 @@
         size="small"
         @click="subscribeDialogVisible = false" />
       <Button
+        label="Show cURL"
+        icon="pi pi-copy"
+        size="small"
+        @click="showSubscriptionCurlPreview" />
+      <Button
         label="Subscribe"
         icon="pi pi-bell"
         size="small"
@@ -150,6 +155,15 @@
     </template>
   </Dialog>
   <Toast position="bottom-left" group="bl" />
+  <Dialog v-model:visible="curlDialogVisible" header="Subscription cURL" modal :style="{ width: '45rem' }">
+    <div>
+      <Textarea v-model="curlText" rows="6" style="width:100%; font-family: monospace;" readonly />
+    </div>
+    <template #footer>
+      <Button label="Copy" icon="pi pi-copy" size="small" @click="copyCurl" />
+      <Button label="Close" size="small" @click="curlDialogVisible = false" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -250,6 +264,8 @@ const notifications = ref<Notification[]>([]);
 const subscribeDialogVisible = ref(false);
 const subscriptionSignal = ref('chng');
 const pendingSubscriptionPath = ref<string | undefined>(undefined);
+const curlDialogVisible = ref(false);
+const curlText = ref('');
 
 const signalsToString = (signals: ShvMap | undefined) => {
   if (!signals) {
@@ -400,6 +416,52 @@ const confirmTreeSubscription = async () => {
   subscribeDialogVisible.value = false;
   subscriptionSignal.value = '';
   pendingSubscriptionPath.value = undefined;
+};
+
+const showSubscriptionCurlPreview = () => {
+  if (!pendingSubscriptionPath.value) {
+    toast.add({ severity: 'warn', summary: 'No path selected', group: 'bl' });
+    return;
+  }
+  const signal = subscriptionSignal.value ? subscriptionSignal.value.trim() : '';
+  if (!signal) {
+    toast.add({ severity: 'warn', summary: 'Invalid signal', detail: 'Signal cannot be empty', group: 'bl' });
+    return;
+  }
+  const cleanSignal = signal.replace(/^:+|:+$/g, '');
+  const ri = `${pendingSubscriptionPath.value}/**:*:${cleanSignal}`;
+  const session_id = localStorage.getItem("session_id");
+  if (!session_id) {
+    router.push('/login');
+    return;
+  }
+  const params = {
+    method: 'POST',
+    body: JSON.stringify({ shv_ri: ri }),
+    headers: {
+      'Authorization': `${session_id}`,
+      'Content-Type': 'application/json',
+    },
+  };
+  try {
+    curlText.value = fetchToCurl("http://localhost:8000/api/subscribe", params);
+    curlDialogVisible.value = true;
+  } catch (err) {
+    toast.add({ severity: 'error', summary: 'Cannot build cURL', detail: `${err}`, group: 'bl' });
+  }
+};
+
+const copyCurl = async () => {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(curlText.value);
+      toast.add({ severity: 'success', summary: 'Copied to clipboard', group: 'bl' });
+    } else {
+      toast.add({ severity: 'warn', summary: 'Clipboard not available', group: 'bl' });
+    }
+  } catch (err) {
+    toast.add({ severity: 'error', summary: 'Copy failed', detail: `${err}`, group: 'bl' });
+  }
 };
 
 const showCurlRequest = () => {
