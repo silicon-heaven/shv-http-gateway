@@ -22,6 +22,16 @@
               v-model:selectionKeys="selectedKey"
               selectionMode="single"
               loadingMode="icon">
+              <template #default="{ node }">
+                <div style="display:flex; align-items:center; justify-content:space-between;">
+                  <div style="display:flex; align-items:center; gap:0.5rem;">
+                    <span>{{ node.label }}</span>
+                  </div>
+                  <div>
+                    <Button icon="pi pi-bell" class="p-button-text p-button-sm" @click.stop="openSubscribeDialog(node)" />
+                  </div>
+                </div>
+              </template>
             </Tree>
         </SplitterPanel>
         <SplitterPanel :size="80" :min-size="5" style="overflow-y: auto; margin-top: 60px;" >
@@ -112,6 +122,33 @@
       </Tabs>
     </SplitterPanel>
   </Splitter>
+  <Dialog
+    v-model:visible="subscribeDialogVisible"
+    header="Add Subscription"
+    modal
+    :style="{ width: '25rem' }">
+    <div class="flex flex-column gap-2">
+      <label for="subscription-signal">Signal</label>
+      <InputText
+        id="subscription-signal"
+        v-model="subscriptionSignal"
+        size="small"
+        autofocus />
+      <small>{{ pendingSubscriptionPath }}/**:*:{{ subscriptionSignal || 'signal' }}</small>
+    </div>
+    <template #footer>
+      <Button
+        label="Cancel"
+        severity="secondary"
+        size="small"
+        @click="subscribeDialogVisible = false" />
+      <Button
+        label="Subscribe"
+        icon="pi pi-bell"
+        size="small"
+        @click="confirmTreeSubscription" />
+    </template>
+  </Dialog>
   <Toast position="bottom-left" group="bl" />
 </template>
 
@@ -136,6 +173,7 @@ import {
   TabPanel,
   Toolbar,
   InputText,
+  Dialog,
   useToast,
   Toast,
   Divider,
@@ -209,6 +247,9 @@ interface RpcErrorResponse {
 const newSubscriptionRI = ref('');
 const subscriptions = ref<Subscription[]>([]);
 const notifications = ref<Notification[]>([]);
+const subscribeDialogVisible = ref(false);
+const subscriptionSignal = ref('chng');
+const pendingSubscriptionPath = ref<string | undefined>(undefined);
 
 const signalsToString = (signals: ShvMap | undefined) => {
   if (!signals) {
@@ -326,6 +367,39 @@ const removeSubscription = async (row: Subscription) => {
     }
     return true;
   });
+};
+
+const openSubscribeDialog = (node: TreeNode) => {
+  pendingSubscriptionPath.value = node.key;
+  subscriptionSignal.value = 'chng';
+  subscribeDialogVisible.value = true;
+};
+
+const confirmTreeSubscription = async () => {
+  if (!pendingSubscriptionPath.value) {
+    toast.add({
+      severity: 'warn',
+      summary: 'No path selected',
+      group: 'bl',
+    });
+    return;
+  }
+  const signal = subscriptionSignal.value ? subscriptionSignal.value.trim() : '';
+  if (!signal) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Invalid signal',
+      detail: 'Signal cannot be empty',
+      group: 'bl',
+    });
+    return;
+  }
+  const cleanSignal = signal.replace(/^:+|:+$/g, '');
+  const ri = `${pendingSubscriptionPath.value}/**:*:${cleanSignal}`;
+  await addSubscription(ri);
+  subscribeDialogVisible.value = false;
+  subscriptionSignal.value = '';
+  pendingSubscriptionPath.value = undefined;
 };
 
 const showCurlRequest = () => {
