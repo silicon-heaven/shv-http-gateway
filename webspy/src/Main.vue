@@ -22,6 +22,16 @@
               v-model:selectionKeys="selectedKey"
               selectionMode="single"
               loadingMode="icon">
+              <template #default="{ node }">
+                <div style="display:flex; align-items:center; justify-content:space-between;">
+                  <div style="display:flex; align-items:center; gap:0.5rem;">
+                    <span>{{ node.label }}</span>
+                  </div>
+                  <div>
+                    <Button icon="pi pi-bell" class="p-button-text p-button-sm" @click.stop="openSubscribeDialog(node)" />
+                  </div>
+                </div>
+              </template>
             </Tree>
         </SplitterPanel>
         <SplitterPanel :size="80" :min-size="5" style="overflow-y: auto; margin-top: 60px;" >
@@ -112,7 +122,48 @@
       </Tabs>
     </SplitterPanel>
   </Splitter>
+  <Dialog
+    v-model:visible="subscribeDialogVisible"
+    header="Add Subscription"
+    modal
+    :style="{ width: '25rem' }">
+    <div class="flex flex-column gap-2">
+      <label for="subscription-signal">Signal</label>
+      <InputText
+        id="subscription-signal"
+        v-model="subscriptionSignal"
+        size="small"
+        autofocus />
+      <small>{{ pendingSubscriptionPath }}/**:*:{{ subscriptionSignal }}</small>
+    </div>
+    <template #footer>
+      <Button
+        label="Cancel"
+        severity="secondary"
+        size="small"
+        @click="subscribeDialogVisible = false" />
+      <Button
+        label="Show cURL"
+        icon="pi pi-copy"
+        size="small"
+        @click="showSubscriptionCurlPreview" />
+      <Button
+        label="Subscribe"
+        icon="pi pi-bell"
+        size="small"
+        @click="confirmTreeSubscription" />
+    </template>
+  </Dialog>
   <Toast position="bottom-left" group="bl" />
+  <Dialog v-model:visible="curlDialogVisible" header="Subscription cURL" modal :style="{ width: '45rem' }">
+    <div>
+      <Textarea v-model="curlText" rows="6" style="width:100%; font-family: monospace;" readonly />
+    </div>
+    <template #footer>
+      <Button label="Copy" icon="pi pi-copy" size="small" @click="copyCurl" />
+      <Button label="Close" size="small" @click="curlDialogVisible = false" />
+    </template>
+  </Dialog>
 </template>
 
 <script setup lang="ts">
@@ -136,6 +187,7 @@ import {
   TabPanel,
   Toolbar,
   InputText,
+  Dialog,
   useToast,
   Toast,
   Divider,
@@ -209,6 +261,11 @@ interface RpcErrorResponse {
 const newSubscriptionRI = ref('');
 const subscriptions = ref<Subscription[]>([]);
 const notifications = ref<Notification[]>([]);
+const subscribeDialogVisible = ref(false);
+const subscriptionSignal = ref('chng');
+const pendingSubscriptionPath = ref<string | undefined>(undefined);
+const curlDialogVisible = ref(false);
+const curlText = ref('');
 
 const signalsToString = (signals: ShvMap | undefined) => {
   if (!signals) {
@@ -326,6 +383,85 @@ const removeSubscription = async (row: Subscription) => {
     }
     return true;
   });
+};
+
+const openSubscribeDialog = (node: TreeNode) => {
+  pendingSubscriptionPath.value = node.key;
+  subscriptionSignal.value = 'chng';
+  subscribeDialogVisible.value = true;
+};
+
+const confirmTreeSubscription = async () => {
+  if (!pendingSubscriptionPath.value) {
+    toast.add({
+      severity: 'warn',
+      summary: 'No path selected',
+      group: 'bl',
+    });
+    return;
+  }
+  const signal = subscriptionSignal.value ? subscriptionSignal.value.trim() : '';
+  if (!signal) {
+    toast.add({
+      severity: 'warn',
+      summary: 'Invalid signal',
+      detail: 'Signal cannot be empty',
+      group: 'bl',
+    });
+    return;
+  }
+  const cleanSignal = signal.replace(/^:+|:+$/g, '');
+  const ri = `${pendingSubscriptionPath.value}/**:*:${cleanSignal}`;
+  await addSubscription(ri);
+  subscribeDialogVisible.value = false;
+  subscriptionSignal.value = '';
+  pendingSubscriptionPath.value = undefined;
+};
+
+const showSubscriptionCurlPreview = () => {
+  if (!pendingSubscriptionPath.value) {
+    toast.add({ severity: 'warn', summary: 'No path selected', group: 'bl' });
+    return;
+  }
+  const signal = subscriptionSignal.value ? subscriptionSignal.value.trim() : '';
+  if (!signal) {
+    toast.add({ severity: 'warn', summary: 'Invalid signal', detail: 'Signal cannot be empty', group: 'bl' });
+    return;
+  }
+  const cleanSignal = signal.replace(/^:+|:+$/g, '');
+  const ri = `${pendingSubscriptionPath.value}/**:*:${cleanSignal}`;
+  const session_id = localStorage.getItem("session_id");
+  if (!session_id) {
+    router.push('/login');
+    return;
+  }
+  const params = {
+    method: 'POST',
+    body: JSON.stringify({ shv_ri: ri }),
+    headers: {
+      'Authorization': `${session_id}`,
+      'Content-Type': 'application/json',
+    },
+  };
+  try {
+    curlText.value = fetchToCurl("http://localhost:8000/api/subscribe", params);
+    curlDialogVisible.value = true;
+  } catch (err) {
+    toast.add({ severity: 'error', summary: 'Cannot build cURL', detail: `${err}`, group: 'bl' });
+  }
+};
+
+const copyCurl = async () => {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(curlText.value);
+      toast.add({ severity: 'success', summary: 'Copied to clipboard', group: 'bl' });
+    } else {
+      toast.add({ severity: 'warn', summary: 'Clipboard not available', group: 'bl' });
+    }
+  } catch (err) {
+    toast.add({ severity: 'error', summary: 'Copy failed', detail: `${err}`, group: 'bl' });
+  }
 };
 
 const showCurlRequest = () => {
