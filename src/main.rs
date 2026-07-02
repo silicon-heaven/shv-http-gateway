@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "webspy")]
+use std::path::{Path, PathBuf};
 
 use base64::prelude::*;
 use clap::Parser;
@@ -9,7 +11,7 @@ use log::{debug, error, info, warn, LevelFilter};
 use rand::rand_core::Rng;
 use rand::rngs::ChaCha20Rng;
 use rand::SeedableRng;
-#[cfg(feature = "webspy")] use rocket::fs::{FileServer,relative};
+#[cfg(feature = "webspy")] use rocket::fs::FileServer;
 use rocket::futures::channel::{self, mpsc::UnboundedSender};
 use rocket::futures::future::Either;
 use rocket::futures::StreamExt;
@@ -528,7 +530,17 @@ pub(crate) fn build_rocket(program_config: ProgramConfig) -> Rocket<Build> {
         .manage(Random(Arc::new(Mutex::new(from_os_rng()))));
 
     #[cfg(feature = "webspy")]
-    let rocket = rocket.mount("/webspy", FileServer::from(relative!("webspy/dist")));
+    let rocket = rocket.mount("/webspy", FileServer::from(webspy_dist_dir()));
 
     rocket
+}
+
+#[cfg(feature = "webspy")]
+fn webspy_dist_dir() -> PathBuf {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| std::env::current_dir().expect("Cannot determine current directory"));
+
+    exe_dir.join("webspy/dist")
 }
