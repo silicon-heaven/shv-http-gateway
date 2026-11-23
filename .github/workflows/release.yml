@@ -1,0 +1,88 @@
+name: Build and Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, nightly]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install system dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v2
+        with:
+          target: x86_64-unknown-linux-gnu
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+          override: true
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features
+
+      - name: Build
+        run: cargo build --all-targets --all-features
+
+      - name: Run tests
+        run: cargo test --all-targets --all-features
+
+      - name: Build and install binary
+        shell: bash
+        run: |
+          cargo install \
+            --all-features \
+            --path '${{ github.workspace }}' \
+            --root '${{ github.workspace }}/install' \
+            --target x86_64-unknown-linux-gnu \
+            --locked
+          mkdir -p dist
+          artifact="shv-http-gateway-${{ matrix.toolchain }}-linux"
+          mv install/bin/shv-http-gateway \
+            "dist/${artifact}-${GITHUB_SHA:0:7}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.toolchain }}-binary
+          path: dist/*
+
+  create-nightly-release:
+    name: Create nightly release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Download nightly binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*-nightly-binary'
+          merge-multiple: true
+
+      - name: Create release
+        uses: silicon-heaven/rust-nightly-release-action@v1.0.0
+        with:
+          path_glob: shv-http-gateway-nightly-*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
