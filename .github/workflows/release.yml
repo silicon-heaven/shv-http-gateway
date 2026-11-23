@@ -17,14 +17,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
         toolchain: [stable, nightly]
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -38,7 +32,7 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
-          target: ${{ matrix.target }}
+          target: x86_64-unknown-linux-gnu
           toolchain: ${{ matrix.toolchain }}
           components: clippy
           override: true
@@ -59,23 +53,17 @@ jobs:
             --all-features \
             --path '${{ github.workspace }}' \
             --root '${{ github.workspace }}/install' \
-            --target '${{ matrix.target }}' \
+            --target x86_64-unknown-linux-gnu \
             --locked
           mkdir -p dist
-          if [[ '${{ matrix.target }}' == *windows* ]]; then
-            artifact="shv-http-gateway-${{ matrix.toolchain }}-windows"
-            mv install/bin/shv-http-gateway.exe \
-              "dist/${artifact}-${GITHUB_SHA:0:7}.exe"
-          else
-            artifact="shv-http-gateway-${{ matrix.toolchain }}-linux"
-            mv install/bin/shv-http-gateway \
-              "dist/${artifact}-${GITHUB_SHA:0:7}"
-          fi
+          artifact="shv-http-gateway-${{ matrix.toolchain }}-linux"
+          mv install/bin/shv-http-gateway \
+            "dist/${artifact}-${GITHUB_SHA:0:7}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: ${{ matrix.os }}-${{ matrix.toolchain }}-binary
+          name: linux-${{ matrix.toolchain }}-binary
           path: dist/*
 
   create-nightly-release:
